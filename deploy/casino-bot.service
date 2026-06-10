@@ -1,0 +1,23 @@
+# systemd ユニット(VPS常駐用)
+# 配置: /etc/systemd/system/casino-bot.service
+# 下の User / WorkingDirectory / パスは環境に合わせて書き換える。
+[Unit]
+Description=Discord Casino Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=casino
+WorkingDirectory=/opt/casino-bot
+# venv の python で bot.py を起動
+ExecStart=/opt/casino-bot/.venv/bin/python /opt/casino-bot/bot.py
+EnvironmentFile=/opt/casino-bot/.env
+Restart=always
+RestartSec=5
+# ログは journald へ
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
