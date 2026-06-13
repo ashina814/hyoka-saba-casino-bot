@@ -46,8 +46,11 @@ class EconomyCog(commands.Cog):
                     "デイリー", f"⏳ {msg}", color=common.COLOR_INFO
                 )
             ts = economy.now_utc().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            await db.update_daily(user.id, new_streak, ts)
-            new_balance = await db.adjust_balance(user.id, amount, "daily")
+            # last_daily/streak/balance/tx_logs を 1トランザクションで更新。
+            # 以前は update_daily と adjust_balance を別 commit していて、
+            # 前者だけ通った場合に「もう受け取った扱いだが残高は据え置き」の
+            # 不整合が起きていた。アトミック化で防ぐ。
+            new_balance = await db.pay_daily(user.id, amount, new_streak, ts)
         e = common.embed(
             "デイリー受け取り", f"🎁 {msg}", color=common.COLOR_WIN
         )

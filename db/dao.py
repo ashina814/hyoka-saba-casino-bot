@@ -213,6 +213,35 @@ class Database:
         )
         await self.conn.commit()
 
+    async def pay_daily(
+        self, user_id: int, amount: int, streak: int, ts: str, reason: str = "daily"
+    ) -> int:
+        """デイリーを **アトミックに** 精算する。
+
+        balance / last_daily / daily_streak / tx_logs を **1つの commit** で更新する。
+        途中で例外が出れば rollback して、何も更新されない状態に戻す。
+        これにより「last_daily だけ進んで残高は据え置き」の不整合を防ぐ。
+        呼び出し側は user_lock を取得した状態で使うこと。
+        """
+        await self.ensure_user(user_id)
+        try:
+            cur = await self.conn.execute(
+                "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+            )
+            balance = int((await cur.fetchone())["balance"])  # type: ignore[index]
+            new_balance = balance + amount
+            await self.conn.execute(
+                "UPDATE users SET balance = ?, last_daily = ?, daily_streak = ?, "
+                "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE user_id = ?",
+                (new_balance, ts, streak, user_id),
+            )
+            await self._log_tx(user_id, amount, new_balance, reason, None)
+            await self.conn.commit()
+            return new_balance
+        except Exception:
+            await self.conn.rollback()
+            raise
+
     async def set_win_streak(self, user_id: int, value: int) -> None:
         await self.conn.execute(
             "UPDATE users SET win_streak = ? WHERE user_id = ?", (value, user_id)
