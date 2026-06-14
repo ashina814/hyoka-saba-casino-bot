@@ -31,6 +31,7 @@ INITIAL_COGS = [
     "cogs.draw",
     "cogs.holdem",
     "cogs.help_cog",
+    "cogs.exchange",
     "cogs.admin",
 ]
 

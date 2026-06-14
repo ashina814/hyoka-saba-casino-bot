@@ -271,15 +271,97 @@ class Database:
         )
         await self.conn.commit()
 
+    # ───────────────────────── 両替申請 ─────────────────────────
+    # direction ラベル
+    EX_ZENY_TO_COIN = "zeny_to_coin"
+    EX_COIN_TO_ZENY = "coin_to_zeny"
+
+    async def create_exchange_request(
+        self,
+        user_id: int,
+        direction: str,
+        send_amount: int,
+        receive_amount: int,
+        fee_amount: int,
+    ) -> int:
+        """両替申請を作成して id を返す(pending)。"""
+        cur = await self.conn.execute(
+            "INSERT INTO exchange_requests "
+            "(user_id, direction, send_amount, receive_amount, fee_amount) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, direction, send_amount, receive_amount, fee_amount),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid)  # type: ignore[arg-type]
+
+    async def attach_exchange_message(
+        self, req_id: int, channel_id: int, message_id: int
+    ) -> None:
+        """承認メッセージID を申請に紐付け(後から編集や復旧に使う)。"""
+        await self.conn.execute(
+            "UPDATE exchange_requests SET log_channel_id=?, log_message_id=? "
+            "WHERE id=?",
+            (channel_id, message_id, req_id),
+        )
+        await self.conn.commit()
+
+    async def get_exchange_request(self, req_id: int):
+        cur = await self.conn.execute(
+            "SELECT * FROM exchange_requests WHERE id=?", (req_id,)
+        )
+        return await cur.fetchone()
+
+    async def set_exchange_status(
+        self, req_id: int, status: str, approver_id: int | None
+    ) -> None:
+        await self.conn.execute(
+            "UPDATE exchange_requests SET status=?, approver_id=?, "
+            "decided_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
+            (status, approver_id, req_id),
+        )
+        await self.conn.commit()
+
+    async def daily_exchange_received(self, user_id: int, direction: str) -> int:
+        """直近24時間に同じ方向で **受領予定/受領済み** になっている合計受領額。
+
+        日次上限の判定はこの値 + 今回希望額が cap を超えないか で行う。
+        pending と approved を含む(申請段階で枠を予約する形)。
+        """
+        cur = await self.conn.execute(
+            "SELECT COALESCE(SUM(receive_amount),0) s FROM exchange_requests "
+            "WHERE user_id=? AND direction=? AND status IN ('pending','approved') "
+            "AND created_at >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')",
+            (user_id, direction),
+        )
+        return int((await cur.fetchone())["s"])  # type: ignore[index]
+
+    async def expired_pending_requests(self):
+        """有効期限切れの pending を返す(自動失効処理で使う)。"""
+        ttl = int(self.setting("exchange_request_ttl_hours", 48))
+        cur = await self.conn.execute(
+            "SELECT * FROM exchange_requests WHERE status='pending' "
+            "AND created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now',?)",
+            (f"-{ttl} hours",),
+        )
+        return list(await cur.fetchall())
+
     # ───────────────────────── 統計(管理パネル用) ─────────────────────────
     async def economy_stats(self) -> dict[str, Any]:
         c = self.conn
+        # owner_id (お釈迦さま=焼却用アカウント) は経済統計から除外する。
+        # 焼却済みカジノコインが残高として残ったままになるため、含めると総供給量・
+        # 資産上位ランキングが歪む。
+        owner_id = int(self.setting("owner_id", 0) or 0)
+        excl = (owner_id,) if owner_id else (0,)  # 0 を渡してもどこにも一致しない
         total = int((await (await c.execute(
-            "SELECT COALESCE(SUM(balance),0) s FROM users")).fetchone())["s"])
+            "SELECT COALESCE(SUM(balance),0) s FROM users WHERE user_id<>?", excl
+        )).fetchone())["s"])
         users = int((await (await c.execute(
-            "SELECT COUNT(*) n FROM users")).fetchone())["n"])
+            "SELECT COUNT(*) n FROM users WHERE user_id<>?", excl
+        )).fetchone())["n"])
         richest = list(await (await c.execute(
-            "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5"
+            "SELECT user_id, balance FROM users WHERE user_id<>? "
+            "ORDER BY balance DESC LIMIT 5", excl
         )).fetchall())
         jp = await self.jackpot_amount("slot")
 
@@ -308,9 +390,11 @@ class Database:
         }
 
     async def leaderboard(self, limit: int = 10) -> list[aiosqlite.Row]:
+        owner_id = int(self.setting("owner_id", 0) or 0)
         cur = await self.conn.execute(
-            "SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT ?",
-            (limit,),
+            "SELECT user_id, balance FROM users WHERE user_id<>? "
+            "ORDER BY balance DESC LIMIT ?",
+            (owner_id if owner_id else 0, limit),
         )
         return list(await cur.fetchall())
 

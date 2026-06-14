@@ -61,6 +61,30 @@ CREATE TABLE IF NOT EXISTS jackpot (
     amount INTEGER NOT NULL DEFAULT 0
 );
 
+-- ───────────────────────── 両替申請 ─────────────────────────
+-- ゼニー(別Botの通貨) ↔ カジノコイン の両替申請を記録する。
+-- direction: 'zeny_to_coin' (ユーザー→お釈迦さまにゼニー送付→承認後にカジノ発行)
+--            'coin_to_zeny' (申請時にカジノコインを即時エスクロー→承認後に運営が手動でゼニー送付)
+-- send_amount  : ユーザーが差し出す側の額(direction の左の通貨)
+-- receive_amount: 手数料控除後にユーザーが受け取る側の額(direction の右の通貨)
+-- status: pending | approved | rejected | expired | cancelled
+CREATE TABLE IF NOT EXISTS exchange_requests (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL,
+    direction       TEXT NOT NULL,
+    send_amount     INTEGER NOT NULL,
+    receive_amount  INTEGER NOT NULL,
+    fee_amount      INTEGER NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    log_channel_id  INTEGER,
+    log_message_id  INTEGER,
+    approver_id     INTEGER,
+    decided_at      TEXT,
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ex_status_user ON exchange_requests(status, user_id);
+CREATE INDEX IF NOT EXISTS idx_ex_created     ON exchange_requests(created_at);
+
 -- ───────────────────────── 管理操作ログ ─────────────────────────
 CREATE TABLE IF NOT EXISTS admin_logs (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +124,14 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
     -- 保有税(シンク): デフォルト OFF。退蔵対策として後から ON にできる
     ('holding_tax_enabled','0',    'bool',  '保有税 ON/OFF'),
     ('holding_tax_threshold','100000','int','保有税の課税閾値'),
-    ('holding_tax_rate',   '0.01', 'float', '保有税 日次率(閾値超過分に課税)');
+    ('holding_tax_rate',   '0.01', 'float', '保有税 日次率(閾値超過分に課税)'),
+
+    -- 両替(ゼニー ↔ カジノコイン)
+    ('exchange_enabled',     '1',    'bool', '両替機能 ON/OFF'),
+    ('exchange_fee_rate',    '0.10', 'float','両替手数料(受け取り側から控除)'),
+    ('exchange_daily_cap',   '50000','int',  '両替の日次上限(方向ごと・受領額ベース)'),
+    ('exchange_request_ttl_hours','48','int','申請の有効時間(時間)。超過で自動失効'),
+    ('exchange_log_channel_id','0',  'int',  '両替申請の承認チャンネル(0=未設定)'),
+    ('owner_id',             '0',    'int',  'お釈迦さま(焼却受取)のDiscordユーザーID(0=未設定)');
 
 INSERT OR IGNORE INTO jackpot (name, amount) VALUES ('slot', 10000);

@@ -82,6 +82,12 @@ class HubView(discord.ui.View):
         cog = self.bot.get_cog("HelpCog")
         await cog.entry(interaction)
 
+    # ── 4段目: 両替 ──
+    @discord.ui.button(label="両替", emoji="💱", row=3,
+                       style=discord.ButtonStyle.success, custom_id="hub:exchange")
+    async def exchange(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._call(interaction, "ExchangeCog", "entry")
+
 
 def hub_embed(bot) -> discord.Embed:
     e = common.embed(
@@ -95,6 +101,9 @@ def hub_embed(bot) -> discord.Embed:
     e.add_field(name="⚂ 丁半 (PVP)", value="丁か半か、1:1", inline=True)
     e.add_field(name="🃏 ホールデム (PVP)", value="テキサスホールデム", inline=True)
     e.add_field(name="🎴 ドローポーカー (PVP)", value="5カードドロー", inline=True)
+    e.add_field(
+        name="💱 両替", value="ゼニー ↔ カジノコイン(申請承認制)", inline=False
+    )
     return e
 
 

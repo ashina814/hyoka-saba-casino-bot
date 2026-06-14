@@ -71,6 +71,34 @@ class ConfigSelect(discord.ui.Select):
         )
 
 
+class OwnerIdModal(discord.ui.Modal, title="お釈迦さま(焼却受取)を設定"):
+    user_id = discord.ui.TextInput(
+        label="Discord ユーザーID(数字のみ)",
+        placeholder="例: 123456789012345678",
+        required=True,
+        max_length=20,
+    )
+
+    def __init__(self, cog: "AdminCog") -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.user_id.value).strip()
+        if not raw.isdigit():
+            await interaction.response.send_message(
+                "⚠️ 数字のIDで入力してください。", ephemeral=True
+            )
+            return
+        await self.cog.bot.db.set_setting("owner_id", raw)
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "config", None, f"owner_id={raw}"
+        )
+        await interaction.response.send_message(
+            f"✅ お釈迦さまを <@{raw}> に設定しました。", ephemeral=True
+        )
+
+
 class AdminPanel(discord.ui.View):
     def __init__(self, cog: "AdminCog") -> None:
         super().__init__(timeout=300)
@@ -95,6 +123,38 @@ class AdminPanel(discord.ui.View):
         view.add_item(ConfigSelect(self.cog, rows))
         await interaction.response.send_message(
             "変更したい設定を選んでください。", view=view, ephemeral=True
+        )
+
+    # ── 両替まわり(ワンタッチ設定) ──
+    @discord.ui.button(label="承認CHをここに設定", emoji="📥", row=1,
+                       style=discord.ButtonStyle.primary)
+    async def set_log_ch(self, interaction: discord.Interaction, _: discord.ui.Button):
+        """押した瞬間のチャンネルを exchange_log_channel_id に登録する。"""
+        ch = interaction.channel
+        if ch is None or not hasattr(ch, "id"):
+            await interaction.response.send_message(
+                "⚠️ このチャンネルは設定先にできません。", ephemeral=True
+            )
+            return
+        await self.cog.bot.db.set_setting("exchange_log_channel_id", str(ch.id))
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "config", None, f"exchange_log_channel_id={ch.id}"
+        )
+        await interaction.response.send_message(
+            f"✅ 両替承認チャンネルを <#{ch.id}> に設定しました。", ephemeral=True
+        )
+
+    @discord.ui.button(label="お釈迦さま設定", emoji="🔥", row=1,
+                       style=discord.ButtonStyle.primary)
+    async def set_owner(self, interaction: discord.Interaction, _: discord.ui.Button):
+        """モーダルで Discord ユーザーID を受け取って owner_id に登録。"""
+        await interaction.response.send_modal(OwnerIdModal(self.cog))
+
+    @discord.ui.button(label="両替申請一覧", emoji="📋", row=1,
+                       style=discord.ButtonStyle.secondary)
+    async def list_pending(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=await self.cog.pending_exchange_embed(), ephemeral=True
         )
 
 
@@ -130,6 +190,31 @@ class AdminCog(commands.Cog):
             e.add_field(
                 name=f"{r['key']} = {r['value']}",
                 value=r["label"] or "​",
+                inline=False,
+            )
+        return e
+
+    async def pending_exchange_embed(self) -> discord.Embed:
+        """両替の保留中申請を一覧表示(管理者向け)。"""
+        cur = await self.bot.db.conn.execute(
+            "SELECT id, user_id, direction, send_amount, receive_amount, created_at "
+            "FROM exchange_requests WHERE status='pending' "
+            "ORDER BY created_at DESC LIMIT 20"
+        )
+        rows = list(await cur.fetchall())
+        e = common.embed("💱 両替 保留中申請", color=common.COLOR_ADMIN)
+        if not rows:
+            e.description = "保留中の申請はありません。"
+            return e
+        for r in rows:
+            dir_label = "ゼニー→カジノ" if r["direction"] == "zeny_to_coin" else "カジノ→ゼニー"
+            e.add_field(
+                name=f"#{r['id']}  {dir_label}",
+                value=(
+                    f"<@{r['user_id']}> 送 **{r['send_amount']:,}** → "
+                    f"受 **{r['receive_amount']:,}**\n"
+                    f"申請: `{r['created_at'][:16]}`"
+                ),
                 inline=False,
             )
         return e
