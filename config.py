@@ -25,6 +25,19 @@ def _parse_ids(raw: str | None) -> set[int]:
     return out
 
 
+# 全ゲーム一覧(キーは Cog の suffix。bot.py 側で cogs.<key> を解決する)。
+# `.env` の ENABLED_GAMES が空なら全て有効、指定があればその集合だけ有効化する。
+ALL_GAMES: tuple[str, ...] = (
+    "slot",
+    "chinchiro",
+    "chohan",
+    "holdem",
+    "draw",
+    "hilo",
+    "blackjack",
+)
+
+
 @dataclass(frozen=True)
 class Config:
     token: str
@@ -33,11 +46,15 @@ class Config:
     db_path: str
     currency_name: str
     currency_emoji: str
+    enabled_games: frozenset[str]    # 空集合の代わりに ALL_GAMES が反映済み
 
     @property
     def currency(self) -> str:
         """表示用: '🪙 チップ' のような結合済み文字列。"""
         return f"{self.currency_emoji} {self.currency_name}".strip()
+
+    def is_game_enabled(self, name: str) -> bool:
+        return name in self.enabled_games
 
 
 def load_config() -> Config:
@@ -50,6 +67,15 @@ def load_config() -> Config:
     dev_guild_raw = os.getenv("DEV_GUILD_ID", "").strip()
     dev_guild_id = int(dev_guild_raw) if dev_guild_raw.isdigit() else None
 
+    # ENABLED_GAMES: カンマ区切り(例: "slot,chinchiro,hilo,blackjack")
+    # 空または未設定なら ALL_GAMES = 全有効。未知のゲーム名は黙って無視。
+    raw_games = os.getenv("ENABLED_GAMES", "").strip()
+    if raw_games:
+        wanted = {g.strip() for g in raw_games.split(",") if g.strip()}
+        enabled = frozenset(g for g in ALL_GAMES if g in wanted)
+    else:
+        enabled = frozenset(ALL_GAMES)
+
     return Config(
         token=token,
         dev_guild_id=dev_guild_id,
@@ -57,4 +83,5 @@ def load_config() -> Config:
         db_path=os.getenv("DB_PATH", "casino.db").strip() or "casino.db",
         currency_name=os.getenv("CURRENCY_NAME", "チップ").strip() or "チップ",
         currency_emoji=os.getenv("CURRENCY_EMOJI", "🪙").strip(),
+        enabled_games=enabled,
     )

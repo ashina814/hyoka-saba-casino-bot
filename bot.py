@@ -22,18 +22,24 @@ logging.basicConfig(
 log = logging.getLogger("casino")
 
 # 読み込む Cog。順序は依存に影響しない。
-INITIAL_COGS = [
+# ゲーム以外の常設 Cog(必ず読む)
+BASE_COGS = [
     "cogs.economy_cog",
     "cogs.hub",
-    "cogs.slot",
-    "cogs.chinchiro",
-    "cogs.chohan",
-    "cogs.draw",
-    "cogs.holdem",
     "cogs.help_cog",
     "cogs.exchange",
     "cogs.admin",
 ]
+
+
+def _resolve_cogs(cfg) -> list[str]:
+    """常設 Cog + 有効なゲーム Cog の一覧を返す。"""
+    from config import ALL_GAMES
+    cogs = list(BASE_COGS)
+    for g in ALL_GAMES:
+        if cfg.is_game_enabled(g):
+            cogs.append(f"cogs.{g}")
+    return cogs
 
 
 class CasinoBot(commands.Bot):
@@ -49,7 +55,7 @@ class CasinoBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.db.connect()
-        for ext in INITIAL_COGS:
+        for ext in _resolve_cogs(self.cfg):
             try:
                 await self.load_extension(ext)
                 log.info("Cog 読み込み: %s", ext)

@@ -17,6 +17,38 @@ RANK_LABEL = {
     11: "J", 12: "Q", 13: "K", 14: "A",
 }
 
+# Unicode の trumps(🂡 など)。スーツごとに開始コードが違い、
+# rank の取り方は: 1=A, 2..10=数字, 11=J, 12=Knight(本実装では未使用), 13=Q, 14=K
+# よって "Q=12, K=13" のトランプ側マッピングは +1 ずれる(ナイトを飛ばす)。
+_TRUMP_BASE = {"♠": 0x1F0A0, "♥": 0x1F0B0, "♦": 0x1F0C0, "♣": 0x1F0D0}
+
+
+def card_emoji(card: "Card") -> str:
+    """カードを Unicode のトランプ絵文字1文字で返す。"""
+    base = _TRUMP_BASE[card.suit]
+    r = card.rank
+    if r == 14:          # A → +1
+        off = 1
+    elif 2 <= r <= 10:   # 数字 → そのまま
+        off = r
+    elif r == 11:        # J → +0xB
+        off = 0xB
+    elif r == 12:        # Q → +0xD (Knightを飛ばす)
+        off = 0xD
+    elif r == 13:        # K → +0xE
+        off = 0xE
+    else:
+        return str(card)
+    return chr(base + off)
+
+
+CARD_BACK = "🂠"  # 裏向き(ディーラーのホールカード等)
+
+
+def hand_emoji(cards) -> str:
+    """カード列を絵文字でスペース区切り表示。"""
+    return " ".join(card_emoji(c) for c in cards)
+
 
 @dataclass(frozen=True)
 class Card:

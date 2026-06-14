@@ -112,6 +112,8 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
     -- PVE ハウスエッジ(ここを管理パネルから自由にいじる)
     ('slot_house_edge',    '0.05', 'float', 'スロットのハウスエッジ'),
     ('chinchiro_house_edge','0.05','float', 'チンチロのハウスエッジ'),
+    ('hilo_house_edge',    '0.05', 'float', 'ハイローのハウスエッジ'),
+    ('blackjack_house_edge','0.00','float', 'ブラックジャックの追加ハウスエッジ(0で本来の3:2ルール)'),
 
     -- スロット ジャックポット(再分配なのでインフレ中立)
     ('jackpot_enabled',    '1',    'bool',  'スロットJP ON/OFF'),
