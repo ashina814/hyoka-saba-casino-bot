@@ -43,6 +43,65 @@ def badge_label(badge_id: str) -> str:
     return f"{b.emoji} {b.label}"
 
 
+# 各称号の (現在値, 目標値) を返す関数。None なら進捗で測れない(獲得イベント型)
+async def progress_for(db, user_id: int, badge_id: str) -> tuple[int, int] | None:
+    async def _cnt(reason: str) -> int:
+        row = await (await db.conn.execute(
+            "SELECT COUNT(*) v FROM tx_logs WHERE user_id=? AND reason=?",
+            (user_id, reason),
+        )).fetchone()
+        return int(row["v"])
+
+    async def _sum_abs_neg(reasons: tuple[str, ...]) -> int:
+        in_list = ",".join("?" for _ in reasons)
+        row = await (await db.conn.execute(
+            f"SELECT COALESCE(-SUM(delta),0) v FROM tx_logs "
+            f"WHERE user_id=? AND delta<0 AND reason IN ({in_list})",
+            (user_id, *reasons),
+        )).fetchone()
+        return int(row["v"])
+
+    row = await (await db.conn.execute(
+        "SELECT max_win_streak, daily_streak FROM users WHERE user_id=?", (user_id,)
+    )).fetchone()
+    max_streak = int(row["max_win_streak"]) if row else 0
+    daily_streak = int(row["daily_streak"]) if row else 0
+
+    if badge_id == "first_jp":
+        return await _cnt("slot_jackpot"), 1
+    if badge_id == "first_global_jp":
+        return await _cnt("global_jp_win"), 1
+    if badge_id == "streak_10":
+        return max_streak, 10
+    if badge_id == "streak_50":
+        return max_streak, 50
+    if badge_id == "streak_100":
+        return max_streak, 100
+    if badge_id == "bj_natural":
+        # 専用 reason がないので、獲得済みで1、それ以外0(進捗測れない)
+        return None
+    if badge_id == "tournament_winner":
+        return None
+    if badge_id == "daily_streak_30":
+        return daily_streak, 30
+    if badge_id == "mega_better":
+        total = await _sum_abs_neg((
+            "slot_bet", "chinchiro_bet", "hilo_bet",
+            "blackjack_bet", "blackjack_double", "blackjack_split", "pvp_escrow"
+        ))
+        return total, 1_000_000
+    if badge_id == "omikuji_oo":
+        return None
+    return None
+
+
+def _bar(cur: int, target: int, width: int = 10) -> str:
+    if target <= 0:
+        return ""
+    filled = min(width, int(width * cur / target))
+    return "█" * filled + "░" * (width - filled)
+
+
 async def _award_and_notify(bot, user_id: int, badge_id: str) -> None:
     """付与に成功(=新規取得)したら、お喋りログに通知。"""
     if await bot.db.award_badge(user_id, badge_id):

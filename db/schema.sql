@@ -112,6 +112,15 @@ CREATE TABLE IF NOT EXISTS global_jackpot (
 );
 INSERT OR IGNORE INTO global_jackpot (id, amount) VALUES (1, 0);
 
+-- ───────────────────────── 自己制限(依存対策) ─────────────────────────
+-- ユーザーが自発的に設定する1日のベット上限。0=無制限。
+-- 解除には「set_at から24時間」のクールダウンを設けて、衝動的な解除を抑制する。
+CREATE TABLE IF NOT EXISTS user_limits (
+    user_id        INTEGER PRIMARY KEY,
+    daily_bet_cap  INTEGER NOT NULL DEFAULT 0,
+    set_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ───────────────────────── 称号 ─────────────────────────
 CREATE TABLE IF NOT EXISTS badges (
     user_id    INTEGER NOT NULL,

@@ -145,6 +145,37 @@ def boost_remaining_sec(bot) -> int:
     return max(0, until - int(_t.time()))
 
 
+async def self_limit_guard(
+    interaction: discord.Interaction, bet: int
+) -> bool:
+    """ユーザーの自己設定上限を超えるベットを弾く。
+
+    超過なら True を返してエラーメッセージを送る(各ゲームの _start から呼ぶ)。
+    上限0は無制限扱い。
+    """
+    bot = interaction.client
+    lim = await bot.db.get_user_limit(interaction.user.id)
+    cap = int(lim.get("daily_bet_cap", 0) or 0)
+    if cap <= 0:
+        return False
+    today = await bot.db.daily_bet_total(interaction.user.id)
+    if today + bet > cap:
+        remain = max(0, cap - today)
+        e = embed(
+            "🛡️ 自己制限に到達",
+            f"今日の累計ベット **{today:,}** / 自己上限 **{cap:,}**\n"
+            f"残り可能ベットは **{remain:,}** です。\n"
+            "上限変更は /プロフィール → 🛡️制限 から(24時間クールダウンあり)。",
+            color=COLOR_INFO,
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=e, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=e, ephemeral=True)
+        return True
+    return False
+
+
 async def maintenance_guard(interaction: discord.Interaction) -> bool:
     """メンテモード中で管理者以外なら、エラーメッセージを送って True を返す。
 
@@ -166,6 +197,19 @@ async def maintenance_guard(interaction: discord.Interaction) -> bool:
     else:
         await interaction.response.send_message(embed=e, ephemeral=True)
     return True
+
+
+async def report_error(bot, where: str, exc: BaseException) -> None:
+    """例外を運営DMに送る共通ヘルパー。
+
+    View や Modal の callback 内で `try/except` した時に呼ぶ。
+    """
+    import traceback as _tb
+    tb = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+    try:
+        await bot.notify_admins(f"🚨 {where}", tb)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def respond_with(

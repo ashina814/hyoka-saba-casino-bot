@@ -95,6 +95,22 @@ class ProfileView(discord.ui.View):
     async def tab_stats(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self._switch(interaction, "stats")
 
+    @discord.ui.button(label="🏅 称号", row=0, custom_id="prof:tab:badges",
+                       style=discord.ButtonStyle.secondary)
+    async def tab_badges(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._switch(interaction, "badges")
+
+    @discord.ui.button(label="🛡️ 制限", row=0, custom_id="prof:tab:limit",
+                       style=discord.ButtonStyle.secondary)
+    async def tab_limit(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._switch(interaction, "limit")
+
+    @discord.ui.button(label="上限を変更", row=1, custom_id="prof:edit_limit",
+                       emoji="🛡️", style=discord.ButtonStyle.primary)
+    async def edit_limit(self, interaction: discord.Interaction,
+                         _: discord.ui.Button):
+        await interaction.response.send_modal(LimitModal(self.cog, self))
+
     # row 1: 履歴ページング(他タブでは disabled)
     @discord.ui.button(label="◀ 前", row=1, custom_id="prof:prev",
                        style=discord.ButtonStyle.secondary)
@@ -116,6 +132,58 @@ class ProfileView(discord.ui.View):
         )
 
 
+class LimitModal(discord.ui.Modal, title="🛡️ 1日のベット上限を設定"):
+    cap_input = discord.ui.TextInput(
+        label="1日の上限(0=無制限)",
+        placeholder="例: 5000",
+        required=True, max_length=12,
+    )
+
+    def __init__(self, cog: "StatsCog", parent: "ProfileView") -> None:
+        super().__init__()
+        self.cog = cog
+        self.parent = parent
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from datetime import datetime, timezone
+        try:
+            new_cap = common.parse_bet(str(self.cap_input.value)) \
+                if str(self.cap_input.value).strip() != "0" else 0
+        except ValueError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        db = self.cog.bot.db
+        cur = await db.get_user_limit(interaction.user.id)
+        old_cap = int(cur.get("daily_bet_cap", 0) or 0)
+        set_at = cur.get("set_at")
+        # 引き上げ/解除はクールダウン(24h)
+        loosening = (old_cap > 0) and (new_cap == 0 or new_cap > old_cap)
+        if loosening and set_at:
+            try:
+                last = datetime.strptime(set_at[:19], "%Y-%m-%dT%H:%M:%S")
+                last = last.replace(tzinfo=timezone.utc)
+                hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
+                if hours < 24:
+                    remain = int(24 - hours)
+                    await interaction.response.send_message(
+                        f"⚠️ 上限を緩める操作は **24時間のクールダウン** があります。"
+                        f"あと約 {remain} 時間お待ちください。",
+                        ephemeral=True,
+                    )
+                    return
+            except ValueError:
+                pass
+        await db.set_user_limit(interaction.user.id, new_cap)
+        msg = "🛡️ 上限を解除しました。" if new_cap == 0 \
+            else f"🛡️ 1日の上限を **{new_cap:,}** に設定しました。"
+        # パネル更新
+        await interaction.response.edit_message(
+            embed=await self.cog.build_embed(interaction.user, "limit"),
+            view=self.parent,
+        )
+        await interaction.followup.send(msg, ephemeral=True)
+
+
 class StatsCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -128,7 +196,73 @@ class StatsCog(commands.Cog):
             return await self._embed_history(user, page)
         if tab == "stats":
             return await self._embed_stats(user)
+        if tab == "badges":
+            return await self._embed_badges(user)
+        if tab == "limit":
+            return await self._embed_limit(user)
         return await self._embed_balance(user)
+
+    async def _embed_limit(self, user: discord.abc.User) -> discord.Embed:
+        db = self.bot.db
+        lim = await db.get_user_limit(user.id)
+        cap = int(lim.get("daily_bet_cap", 0) or 0)
+        today = await db.daily_bet_total(user.id)
+        e = common.embed(
+            f"👤 {user.display_name} — 🛡️ 自己制限",
+            "自分自身に1日のベット上限を設定できます。\n"
+            "ギャンブルとの健全な距離をとるための機能です。",
+            color=common.COLOR_INFO,
+        )
+        if cap <= 0:
+            e.add_field(name="現在の上限", value="未設定(無制限)", inline=False)
+        else:
+            from core.badges import _bar
+            e.add_field(
+                name="1日の上限",
+                value=f"`{_bar(today, cap)}` **{today:,} / {cap:,}**",
+                inline=False,
+            )
+        e.add_field(
+            name="ヒント",
+            value=(
+                "・上限変更は **「上限を変更」** ボタンから\n"
+                "・新規設定は即時反映\n"
+                "・**上限の引き上げ/解除には24時間のクールダウン**\n"
+                "・引き下げ(より厳しく)はいつでも可能"
+            ),
+            inline=False,
+        )
+        return e
+
+    async def _embed_badges(self, user: discord.abc.User) -> discord.Embed:
+        from core.badges import BADGES, progress_for, _bar
+        db = self.bot.db
+        earned = set(await db.user_badges(user.id))
+        e = common.embed(
+            f"👤 {user.display_name} のプロフィール — 🏅 称号",
+            f"獲得: **{len(earned)} / {len(BADGES)}**",
+            color=common.COLOR_INFO,
+        )
+        lines = []
+        for b in BADGES:
+            has = b.id in earned
+            mark = "✅" if has else "▫️"
+            prog = await progress_for(db, user.id, b.id)
+            if has:
+                lines.append(f"{mark} {b.emoji} **{b.label}**  _{b.description}_")
+            elif prog:
+                cur, target = prog
+                pct = min(100, int(cur * 100 / target)) if target else 0
+                lines.append(
+                    f"{mark} {b.emoji} **{b.label}**  `{_bar(cur, target)}` "
+                    f"{cur:,}/{target:,} ({pct}%)\n"
+                    f"　_{b.description}_"
+                )
+            else:
+                lines.append(f"{mark} {b.emoji} **{b.label}**  _{b.description}_")
+        e.add_field(name="一覧", value="\n".join(lines), inline=False)
+        e.set_thumbnail(url=user.display_avatar.url)
+        return e
 
     async def _embed_balance(self, user: discord.abc.User) -> discord.Embed:
         db = self.bot.db

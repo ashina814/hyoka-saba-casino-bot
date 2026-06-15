@@ -133,6 +133,10 @@ class HubView(discord.ui.View):
             "大会", "🏆", 3, discord.ButtonStyle.danger,
             "hub:tournament", "TournamentCog",
         ))
+        self.add_item(_RouteButton(
+            "殿堂", "🏛️", 3, discord.ButtonStyle.secondary,
+            "hub:hall", "HallCog",
+        ))
 
 
 async def hub_embed(bot) -> discord.Embed:

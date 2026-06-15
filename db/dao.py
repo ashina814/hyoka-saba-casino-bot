@@ -431,6 +431,39 @@ class Database:
         )
         return list(await cur.fetchall())
 
+    # ───────────────────────── 自己制限 ─────────────────────────
+    async def get_user_limit(self, user_id: int) -> dict[str, Any]:
+        cur = await self.conn.execute(
+            "SELECT daily_bet_cap, set_at FROM user_limits WHERE user_id=?",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+        if not row:
+            return {"daily_bet_cap": 0, "set_at": None}
+        return {"daily_bet_cap": int(row["daily_bet_cap"]), "set_at": row["set_at"]}
+
+    async def set_user_limit(self, user_id: int, daily_bet_cap: int) -> None:
+        await self.conn.execute(
+            "INSERT INTO user_limits (user_id, daily_bet_cap, set_at) "
+            "VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "daily_bet_cap=excluded.daily_bet_cap, set_at=excluded.set_at",
+            (user_id, max(0, daily_bet_cap)),
+        )
+        await self.conn.commit()
+
+    async def daily_bet_total(self, user_id: int) -> int:
+        """今日(UTC)の累計ベット額(絶対値)。自己制限の判定に使う。"""
+        cur = await self.conn.execute(
+            "SELECT COALESCE(-SUM(delta),0) v FROM tx_logs "
+            "WHERE user_id=? AND delta<0 "
+            "AND reason IN ('slot_bet','chinchiro_bet','hilo_bet',"
+            "'blackjack_bet','blackjack_double','blackjack_split','pvp_escrow') "
+            "AND ts >= strftime('%Y-%m-%dT00:00:00.000Z','now')",
+            (user_id,),
+        )
+        return int((await cur.fetchone())["v"])
+
     # ───────────────────────── 大会 ─────────────────────────
     async def start_tournament(
         self, name: str, kind: str, prize_pool: int,

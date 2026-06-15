@@ -47,6 +47,8 @@ class ChinchiroCog(commands.Cog):
         cfg = self.bot.cfg
         user = interaction.user
 
+        if await common.self_limit_guard(interaction, bet):
+            return
         async with db.user_lock(user.id):
             if await db.is_frozen(user.id):
                 await common.respond_with(
