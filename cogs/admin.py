@@ -18,8 +18,9 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 
+from core import economy
 from ui import common
 
 
@@ -312,11 +313,14 @@ class AdminDashboard(discord.ui.View):
         await interaction.response.send_modal(AuditModal(self.cog))
 
     # row 2: 経済・設定
-    @discord.ui.button(label="経済統計", emoji="📊", row=2,
+    @discord.ui.button(label="経済ダッシュボード", emoji="📊", row=2,
                        style=discord.ButtonStyle.primary)
     async def stats(self, interaction: discord.Interaction, _: discord.ui.Button):
+        view = EconomyDashboardView(self.cog)
         await interaction.response.send_message(
-            embed=await self.cog.stats_embed(), ephemeral=True
+            embed=await self.cog.eco_embed_overview(),
+            view=view,
+            ephemeral=True,
         )
 
     @discord.ui.button(label="設定一覧", emoji="📋", row=2,
@@ -374,6 +378,48 @@ class AdminDashboard(discord.ui.View):
                        style=discord.ButtonStyle.secondary)
     async def reload(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(ReloadModal(self.cog))
+
+
+class EconomyDashboardView(discord.ui.View):
+    """経済ダッシュボードの3タブ切替。管理者のみ操作可。"""
+
+    def __init__(self, cog: "AdminCog") -> None:
+        super().__init__(timeout=180)
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message(
+                "🚫 管理者専用です。", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="概要", emoji="🏠", style=discord.ButtonStyle.primary)
+    async def overview(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=await self.cog.eco_embed_overview(), view=self
+        )
+
+    @discord.ui.button(label="詳細", emoji="🔬", style=discord.ButtonStyle.secondary)
+    async def detail(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=await self.cog.eco_embed_detail(), view=self
+        )
+
+    @discord.ui.button(label="推移", emoji="📅", style=discord.ButtonStyle.secondary)
+    async def trend(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=await self.cog.eco_embed_trend(), view=self
+        )
+
+    @discord.ui.button(label="今すぐスナップショット", emoji="📸",
+                       style=discord.ButtonStyle.success)
+    async def snap(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self.cog.bot.db.write_snapshot_today()
+        await interaction.response.send_message(
+            "📸 スナップショットを記録しました。", ephemeral=True
+        )
 
 
 class OwnerIdModal(discord.ui.Modal, title="お釈迦さま(焼却受取)を設定"):
@@ -663,25 +709,176 @@ class AdminCog(commands.Cog):
         e.add_field(name="現在残高", value=common.money(self.bot.cfg, bal))
         await interaction.response.send_message(embed=e, ephemeral=True)
 
-    # ── 経済統計 ──
-    async def stats_embed(self) -> discord.Embed:
-        s = await self.bot.db.economy_stats()
+    # ── 経済ダッシュボード(3タブ) ──
+    async def eco_embed_overview(self) -> discord.Embed:
+        """🟢🟡🔴 で健康度を一目で判別 + 主要指標。"""
+        db = self.bot.db
         cfg = self.bot.cfg
-        e = common.embed("📊 経済統計", color=common.COLOR_ADMIN)
-        e.add_field(name="総供給量", value=common.money(cfg, s["total_supply"]))
-        e.add_field(name="ユーザー数", value=f"{s['user_count']:,}")
-        e.add_field(name="JP残高", value=common.money(cfg, s["jackpot"]))
+        m = await db.economy_dashboard()
+        g_icon, g_msg = economy.classify_gini(m["gini"])
+        i_icon, i_msg, i_rate = economy.classify_inflation(
+            m["period_30d"]["net"], m["total_supply"]
+        )
+        a_icon, a_msg = economy.classify_activity(
+            m["active_count_7d"], m["user_count"]
+        )
+
+        # 健康度サマリの総合判定(最悪寄せ)
+        worst = max((g_icon, i_icon, a_icon), key=lambda x: "🔴🟡🟢".index(x))
+        summary = {"🟢": "健康", "🟡": "警告", "🔴": "危険"}[worst]
+
+        e = common.embed(
+            f"📊 経済ダッシュボード — {worst} {summary}",
+            f"**Gini**: {g_icon} {g_msg}\n"
+            f"**インフレ**: {i_icon} {i_msg} ({i_rate:+.1f}%/月)\n"
+            f"**アクティブ**: {a_icon} {a_msg}",
+            color=common.COLOR_ADMIN,
+        )
+        e.add_field(name="総供給量", value=common.money(cfg, m["total_supply"]))
+        e.add_field(name="ユーザー数", value=f"{m['user_count']:,}")
+        e.add_field(name="アクティブ(7d)", value=f"{m['active_count_7d']:,}")
+        e.add_field(name="Gini係数", value=f"`{m['gini']:.3f}`")
+        e.add_field(name="上位10%集中度", value=f"{m['top10_share'] * 100:.1f}%")
+        e.add_field(name="中央値残高", value=common.money(cfg, m["median_balance"]))
+        e.add_field(name="JP残高", value=common.money(cfg, m["jackpot"]))
+        e.add_field(name="24時間ベット量", value=common.money(cfg, m["bet_volume_24h"]))
         e.add_field(
-            name="累計シンク(消滅/徴収)",
-            value=common.money(cfg, s["lifetime_sink"]),
+            name="30日純発行(発行−消滅)",
+            value=common.money(cfg, m["period_30d"]["net"]),
+        )
+        e.set_footer(text="他のタブで詳細/推移を確認 / 1日1回スナップショット自動保存")
+        return e
+
+    async def eco_embed_detail(self) -> discord.Embed:
+        """ソース/シンクの内訳と上位プレイヤー。"""
+        db = self.bot.db
+        cfg = self.bot.cfg
+        m = await db.economy_dashboard()
+        e = common.embed("📊 経済ダッシュボード — 詳細", color=common.COLOR_ADMIN)
+
+        for label, key in (("24時間", "period_1d"), ("7日間", "period_7d"),
+                           ("30日間", "period_30d")):
+            p = m[key]
+            e.add_field(
+                name=f"📈 ソース/シンク ({label})",
+                value=(
+                    f"発行: **{p['source']:,}**\n"
+                    f"消滅: **{p['sink']:,}**\n"
+                    f"純: **{p['net']:+,}**"
+                ),
+                inline=True,
+            )
+
+        # 7日間の reason 内訳(上位5)
+        srcs = m["top_sources_7d"]
+        sinks = m["top_sinks_7d"]
+        e.add_field(
+            name="🟢 主なソース(7d, reason別)",
+            value="\n".join(
+                f"`{common.tx_reason_jp(r['reason'])}` +{int(r['s']):,}"
+                for r in srcs
+            ) or "—",
             inline=False,
         )
+        e.add_field(
+            name="🔴 主なシンク(7d, reason別)",
+            value="\n".join(
+                f"`{common.tx_reason_jp(r['reason'])}` -{int(r['s']):,}"
+                for r in sinks
+            ) or "—",
+            inline=False,
+        )
+
+        rows = await db.leaderboard(5)
         rich = "\n".join(
             f"{i+1}. <@{r['user_id']}> — {common.money(cfg, int(r['balance']))}"
-            for i, r in enumerate(s["richest"])
+            for i, r in enumerate(rows)
         ) or "—"
-        e.add_field(name="資産上位(お釈迦さま除く)", value=rich, inline=False)
+        e.add_field(name="🏆 資産上位5(お釈迦さま除外)", value=rich, inline=False)
         return e
+
+    async def eco_embed_trend(self) -> discord.Embed:
+        """過去のスナップショット推移と当日比較。"""
+        db = self.bot.db
+        cfg = self.bot.cfg
+        snaps = await db.recent_snapshots(14)
+        if not snaps:
+            e = common.embed(
+                "📊 経済ダッシュボード — 推移",
+                "まだスナップショットが記録されていません。\n"
+                "次の日次更新(UTC 00時頃)以降に履歴が見え始めます。",
+                color=common.COLOR_ADMIN,
+            )
+            return e
+        # 当日と前回(あれば前日)を比較
+        cur_metrics = await db.economy_dashboard()
+        latest = snaps[0]
+
+        def _delta(now: int, prev: int) -> str:
+            d = now - prev
+            sign = "📈 +" if d >= 0 else "📉 "
+            return f"{sign}{d:,}"
+
+        e = common.embed(
+            "📊 経済ダッシュボード — 推移",
+            f"最新スナップショット: `{latest['date']}`",
+            color=common.COLOR_ADMIN,
+        )
+        e.add_field(
+            name="総供給量(現在 vs 直近)",
+            value=(
+                f"{common.money(cfg, cur_metrics['total_supply'])} / "
+                f"{_delta(cur_metrics['total_supply'], int(latest['total_supply']))}"
+            ),
+            inline=False,
+        )
+        e.add_field(
+            name="Gini(現在 vs 直近)",
+            value=f"`{cur_metrics['gini']:.3f}` (Δ {cur_metrics['gini'] - float(latest['gini']):+.3f})",
+        )
+        e.add_field(
+            name="アクティブ(7d)",
+            value=f"{cur_metrics['active_count_7d']:,} "
+                  f"({_delta(cur_metrics['active_count_7d'], int(latest['active_count']))})",
+        )
+
+        # 過去14日テーブル(コードブロックで等幅)
+        lines = ["日付        供給        Gini  Active   30d純"]
+        for s in snaps:
+            lines.append(
+                f"{s['date']}  {int(s['total_supply']):>9,}  "
+                f"{float(s['gini']):.3f}  {int(s['active_count']):>5}  "
+                f"{int(s['monthly_net']):>+9,}"
+            )
+        e.add_field(
+            name="📅 直近14日スナップショット",
+            value="```\n" + "\n".join(lines) + "\n```",
+            inline=False,
+        )
+        return e
+
+    # ── スナップショット日次ループ ──
+    @tasks.loop(hours=24)
+    async def _snapshot_loop(self) -> None:
+        try:
+            await self.bot.db.write_snapshot_today()
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("casino.admin").exception("snapshot 失敗")
+
+    @_snapshot_loop.before_loop
+    async def _before_snapshot(self) -> None:
+        await self.bot.wait_until_ready()
+        # 起動時に1回流して、初日のデータを早めに作る
+        try:
+            await self.bot.db.write_snapshot_today()
+        except Exception:  # noqa: BLE001
+            pass
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        if not self._snapshot_loop.is_running():
+            self._snapshot_loop.start()
 
     # ── 設定一覧 ──
     async def settings_embed(self) -> discord.Embed:

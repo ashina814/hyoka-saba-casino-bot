@@ -475,6 +475,137 @@ class Database:
             "lifetime_sink": sink,
         }
 
+    async def economy_dashboard(self) -> dict[str, Any]:
+        """経済ダッシュボード用の集計。
+
+        owner_id(お釈迦さま) は供給/集中/Gini から除外。お釈迦さま口座の残高は
+        焼却済みカジノコインを抱える設計なので含めると指標が歪む。
+        """
+        from core.economy import gini as _gini
+        c = self.conn
+        owner_id = int(self.setting("owner_id", 0) or 0)
+        excl = (owner_id if owner_id else 0,)
+
+        # 全残高(>0 のみ Gini に使う)。owner 除外。
+        cur = await c.execute(
+            "SELECT balance FROM users WHERE user_id<>? ORDER BY balance ASC", excl
+        )
+        balances = [int(r["balance"]) for r in await cur.fetchall()]
+        positive = [b for b in balances if b > 0]
+        total_supply = sum(positive)
+        user_count = len(balances)
+        g = _gini(positive)
+        # 上位10%が持つ割合
+        if positive:
+            sorted_desc = sorted(positive, reverse=True)
+            top_n = max(1, len(sorted_desc) // 10)
+            top10_share = sum(sorted_desc[:top_n]) / total_supply if total_supply else 0.0
+        else:
+            top10_share = 0.0
+        median = positive[len(positive) // 2] if positive else 0
+
+        # アクティブ: 直近7日に tx あるユーザー数
+        cur = await c.execute(
+            "SELECT COUNT(DISTINCT user_id) n FROM tx_logs "
+            "WHERE ts >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')"
+        )
+        active_count = int((await cur.fetchone())["n"])
+
+        # ソース/シンク 内訳(reason 別 SUM(delta))
+        async def _sum_period(where_extra: str, days: int) -> int:
+            row = await (await c.execute(
+                f"SELECT COALESCE(SUM(delta),0) s FROM tx_logs "
+                f"WHERE {where_extra} "
+                f"AND ts >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-{days} days')"
+            )).fetchone()
+            return int(row["s"])
+
+        # 「発行」= 残高が増えるトランザクション(正の delta)。
+        # 「消滅」= 残高が減るトランザクション(負の delta、絶対値)。
+        # 純発行 = 発行 + 消滅(消滅が負なのでそのまま足す)
+        async def _period(days: int) -> dict[str, int]:
+            return {
+                "source": await _sum_period("delta > 0", days),
+                "sink": -(await _sum_period("delta < 0", days)),
+                "net": await _sum_period("1=1", days),
+            }
+        d1 = await _period(1)
+        d7 = await _period(7)
+        d30 = await _period(30)
+
+        # ベットボリューム(24h): ゲームの bet 系 reason の絶対値
+        bet_reasons = ("slot_bet", "chinchiro_bet", "hilo_bet",
+                       "blackjack_bet", "blackjack_double", "blackjack_split",
+                       "pvp_escrow")
+        in_list = ",".join(f"'{r}'" for r in bet_reasons)
+        bet_vol_24h = -(await _sum_period(f"reason IN ({in_list})", 1))
+
+        # reason 別ランキング(ソース/シンク TOP)
+        cur = await c.execute(
+            f"SELECT reason, SUM(delta) s FROM tx_logs "
+            f"WHERE delta > 0 "
+            f"AND ts >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days') "
+            f"GROUP BY reason ORDER BY s DESC LIMIT 5"
+        )
+        top_sources = [dict(r) for r in await cur.fetchall()]
+        cur = await c.execute(
+            f"SELECT reason, -SUM(delta) s FROM tx_logs "
+            f"WHERE delta < 0 "
+            f"AND ts >= strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days') "
+            f"GROUP BY reason ORDER BY s DESC LIMIT 5"
+        )
+        top_sinks = [dict(r) for r in await cur.fetchall()]
+
+        jp = await self.jackpot_amount("slot")
+
+        return {
+            "total_supply": total_supply,
+            "user_count": user_count,
+            "active_count_7d": active_count,
+            "gini": g,
+            "top10_share": top10_share,
+            "median_balance": median,
+            "jackpot": jp,
+            "period_1d": d1,
+            "period_7d": d7,
+            "period_30d": d30,
+            "bet_volume_24h": bet_vol_24h,
+            "top_sources_7d": top_sources,
+            "top_sinks_7d": top_sinks,
+        }
+
+    async def write_snapshot_today(self) -> dict[str, Any]:
+        """今日(UTC)のスナップショットを INSERT OR REPLACE。集計後のメトリクスを返す。"""
+        m = await self.economy_dashboard()
+        today = self._today_utc()
+        await self.conn.execute(
+            "INSERT INTO economy_snapshots "
+            "(date, total_supply, user_count, active_count, gini, top10_share, "
+            "median_balance, jp_amount, monthly_net) "
+            "VALUES (?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(date) DO UPDATE SET "
+            "total_supply=excluded.total_supply, user_count=excluded.user_count, "
+            "active_count=excluded.active_count, gini=excluded.gini, "
+            "top10_share=excluded.top10_share, median_balance=excluded.median_balance, "
+            "jp_amount=excluded.jp_amount, monthly_net=excluded.monthly_net",
+            (today, m["total_supply"], m["user_count"], m["active_count_7d"],
+             m["gini"], m["top10_share"], m["median_balance"], m["jackpot"],
+             m["period_30d"]["net"]),
+        )
+        await self.conn.commit()
+        return m
+
+    @staticmethod
+    def _today_utc() -> str:
+        import datetime
+        return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+    async def recent_snapshots(self, n: int = 14) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT * FROM economy_snapshots ORDER BY date DESC LIMIT ?", (n,)
+        )
+        return list(await cur.fetchall())
+
     async def leaderboard(self, limit: int = 10) -> list[aiosqlite.Row]:
         owner_id = int(self.setting("owner_id", 0) or 0)
         cur = await self.conn.execute(

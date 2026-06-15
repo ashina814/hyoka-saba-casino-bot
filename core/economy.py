@@ -84,6 +84,62 @@ def jackpot_contribution(db: Database, bet: int) -> int:
     return int(math.floor(bet * rate))
 
 
+def gini(balances: list[int]) -> float:
+    """残高分布の Gini 係数(0=平等, 1=独占)を返す。
+
+    定義: G = (Σ_i (2i - n - 1) * b_i) / (n * Σ b_i)  (b は昇順ソート、i は1始まり)
+    総資産が0 or 人数1人以下なら 0.0(計算不能=平等とみなす)。
+    """
+    arr = sorted(b for b in balances if b > 0)
+    n = len(arr)
+    if n < 2:
+        return 0.0
+    total = sum(arr)
+    if total <= 0:
+        return 0.0
+    cumulative = 0
+    for i, b in enumerate(arr, start=1):
+        cumulative += (2 * i - n - 1) * b
+    return cumulative / (n * total)
+
+
+def classify_gini(g: float) -> tuple[str, str]:
+    """Gini 値 → (アイコン, 判定文)。"""
+    if g >= 0.85:
+        return ("🔴", "格差が極端。少数のクジラに資産が集中している")
+    if g >= 0.75:
+        return ("🟡", "格差が大きい。デイリー減衰や保有税の強化を検討")
+    if g >= 0.55:
+        return ("🟢", "やや偏りはあるが許容範囲")
+    return ("🟢", "比較的平等")
+
+
+def classify_inflation(monthly_net: int, total_supply: int) -> tuple[str, str, float]:
+    """月次の純発行量から (アイコン, 判定文, インフレ率%) を返す。"""
+    if total_supply <= 0:
+        return ("🟢", "判定不能(供給ゼロ)", 0.0)
+    rate = monthly_net / total_supply * 100.0
+    if rate >= 15:
+        return ("🔴", "急速にインフレ進行中。ハウスエッジ/レーキ上げ、daily 減衰強化を検討", rate)
+    if rate >= 5:
+        return ("🟡", "ややインフレ気味。今後も増え続けるなら対策を", rate)
+    if rate <= -10:
+        return ("🟡", "デフレ気味。チップが消えすぎ、プレイヤー離れに注意", rate)
+    return ("🟢", "供給は概ね安定", rate)
+
+
+def classify_activity(active: int, total: int) -> tuple[str, str]:
+    """アクティブ率(直近Nプレイ済み / 総ユーザー)から判定。"""
+    if total <= 0:
+        return ("🟢", "ユーザーなし")
+    ratio = active / total
+    if ratio >= 0.5:
+        return ("🟢", "活発に利用されている")
+    if ratio >= 0.2:
+        return ("🟡", "プレイ頻度は中程度")
+    return ("🔴", "アクティブが少ない。イベントや報酬強化の検討余地")
+
+
 def holding_tax(db: Database, balance: int) -> int:
     """保有税(日次)。閾値超過分にのみ課税。OFF または閾値以下なら0。"""
     if not db.setting("holding_tax_enabled", False):

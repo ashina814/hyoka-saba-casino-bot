@@ -86,6 +86,21 @@ CREATE TABLE IF NOT EXISTS exchange_requests (
 CREATE INDEX IF NOT EXISTS idx_ex_status_user ON exchange_requests(status, user_id);
 CREATE INDEX IF NOT EXISTS idx_ex_created     ON exchange_requests(created_at);
 
+-- ───────────────────────── 経済スナップショット(日次自動) ─────────────────────────
+-- 1日1回、その時点の経済指標を記録。前日比/週次比などの推移分析に使う。
+CREATE TABLE IF NOT EXISTS economy_snapshots (
+    date          TEXT PRIMARY KEY,    -- 'YYYY-MM-DD' (UTC)
+    total_supply  INTEGER NOT NULL,
+    user_count    INTEGER NOT NULL,
+    active_count  INTEGER NOT NULL,    -- 直近7日に tx_logs がある人数
+    gini          REAL    NOT NULL,
+    top10_share   REAL    NOT NULL,    -- 上位10%が持つ割合
+    median_balance INTEGER NOT NULL,
+    jp_amount     INTEGER NOT NULL,
+    monthly_net   INTEGER NOT NULL,    -- 直近30日の純発行(発行-消滅)
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ───────────────────────── デイリーチャレンジ受取記録 ─────────────────────────
 -- 同じユーザー × 同じ日 × 同じチャレンジID は一度しか報酬を出さない。
 CREATE TABLE IF NOT EXISTS claimed_challenges (
