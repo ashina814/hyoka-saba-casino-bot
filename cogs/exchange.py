@@ -19,7 +19,7 @@ import logging
 import math
 
 import discord
-from discord import app_commands
+# (app_commands removed: no slash commands here anymore)
 from discord.ext import commands, tasks
 
 from db.dao import InsufficientFunds
@@ -646,10 +646,7 @@ class ExchangeCog(commands.Cog):
     async def _before_sweep(self) -> None:
         await self.bot.wait_until_ready()
 
-    # ── スラッシュコマンド ──
-    @app_commands.command(name="両替", description="両替パネルを開く")
-    async def exchange_cmd(self, interaction: discord.Interaction) -> None:
-        await self.entry(interaction)
+    # スラッシュコマンドは持たない。/カジノ の両替ボタンから entry() が呼ばれる。
 
 
 async def setup(bot) -> None:

@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import discord
-from discord import app_commands
+# (app_commands removed: no slash commands here anymore)
 from discord.ext import commands
 
 from core import economy, hand, match
@@ -151,15 +151,6 @@ class HoldemCog(commands.Cog):
         await interaction.response.send_modal(
             common.BetModal(self.bot, "🃏 ホールデム — 場を立てる(参加費=スタック)", self._create)
         )
-
-    @app_commands.command(name="ホールデム", description="テキサスホールデムの場を立てる(PVP)")
-    @app_commands.describe(バイイン="持ち込むスタック(参加費)")
-    async def cmd(self, interaction: discord.Interaction, バイイン: int) -> None:
-        err = common.validate_bet(self.bot, バイイン)
-        if err:
-            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
-            return
-        await self._create(interaction, バイイン)
 
     async def _create(self, interaction: discord.Interaction, bet: int) -> None:
         if bet < 40:

@@ -1,11 +1,10 @@
 """ルール説明。初心者向けに各ゲームの遊び方を Embed で表示する。
 
-`/ルール` と、ハブの『ルール』ボタン(entry)から、ゲーム選択メニューで開く。
+ハブパネルの『ルール』ボタン(entry)から開く。スラッシュコマンドは持たない。
 """
 from __future__ import annotations
 
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 from ui import common
@@ -206,11 +205,8 @@ class HelpCog(commands.Cog):
             embed=e, view=RuleView(self.bot), ephemeral=True
         )
 
-    @app_commands.command(name="ルール", description="このサーバーで遊べるゲームの遊び方を表示")
-    async def rules(self, interaction: discord.Interaction) -> None:
-        # サブコマンド/Choice はBotごとに有効ゲームが違うため動的に出せない。
-        # メニュー一本に統一し、選択肢は ENABLED_GAMES に応じて自動で絞る。
-        await self.entry(interaction)
+    # /ルール は /カジノ のルールボタンに集約。
+    # entry() はそのままハブから呼ばれるので保持。
 
 
 async def setup(bot) -> None:

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 import discord
-from discord import app_commands
+# (app_commands removed: no slash commands here anymore)
 from discord.ext import commands
 
 from ui import common
@@ -222,9 +222,7 @@ class ChallengesCog(commands.Cog):
         await self._add_claim_buttons(view, interaction.user.id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name="チャレンジ", description="今日のデイリーチャレンジを表示")
-    async def cmd(self, interaction: discord.Interaction) -> None:
-        await self.entry(interaction)
+    # スラッシュコマンドは持たない。/カジノ のチャレンジボタンから entry() が呼ばれる。
 
 
 class _ClaimButton(discord.ui.Button):

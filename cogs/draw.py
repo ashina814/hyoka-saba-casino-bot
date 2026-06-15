@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import discord
-from discord import app_commands
+# (app_commands removed: no slash commands here anymore)
 from discord.ext import commands
 
 from core import economy, hand, match
@@ -148,15 +148,6 @@ class DrawCog(commands.Cog):
         await interaction.response.send_modal(
             common.BetModal(self.bot, "🎴 ドローポーカー — 場を立てる", self._create)
         )
-
-    @app_commands.command(name="ドロー", description="5カードドローの場を立てる(PVP)")
-    @app_commands.describe(ベット="参加費")
-    async def cmd(self, interaction: discord.Interaction, ベット: int) -> None:
-        err = common.validate_bet(self.bot, ベット)
-        if err:
-            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
-            return
-        await self._create(interaction, ベット)
 
     async def _create(self, interaction: discord.Interaction, bet: int) -> None:
         mid = match.new_match_id("draw")

@@ -76,25 +76,8 @@ class EconomyCog(commands.Cog):
         )
 
     # ───────────────────────── スラッシュコマンド ─────────────────────────
-    @app_commands.command(name="残高", description="自分または相手の残高を表示")
-    @app_commands.describe(相手="残高を見たい相手(省略で自分)")
-    async def balance(
-        self, interaction: discord.Interaction, 相手: discord.User | None = None
-    ) -> None:
-        target = 相手 or interaction.user
-        e = await self.build_balance_embed(target)
-        await interaction.response.send_message(embed=e, ephemeral=(相手 is None))
-
-    @app_commands.command(name="デイリー", description="1日1回のチップを受け取る")
-    async def daily(self, interaction: discord.Interaction) -> None:
-        e = await self.claim_daily(interaction.user)
-        await interaction.response.send_message(embed=e, ephemeral=True)
-
-    @app_commands.command(name="ランキング", description="残高の長者番付を表示")
-    async def leaderboard(self, interaction: discord.Interaction) -> None:
-        e = await self.build_leaderboard_embed()
-        await interaction.response.send_message(embed=e)
-
+    # 残高/デイリー/ランキングは /カジノ パネル経由に集約。
+    # /送金 だけはメンション指定が必須なのでテキストコマンドを残す。
     @app_commands.command(name="送金", description="他のプレイヤーにチップを送る")
     @app_commands.describe(相手="送り先", 金額="送る額")
     async def transfer(

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 
 import discord
-from discord import app_commands
+# (app_commands removed: no slash commands here anymore)
 from discord.ext import commands
 
 from core import dice
@@ -41,15 +41,6 @@ class ChinchiroCog(commands.Cog):
         await common.send_bet_panel(
             interaction, self.bot, self._run, title="🎲 チンチロ — ベット"
         )
-
-    @app_commands.command(name="チンチロ", description="親(Bot)とチンチロ勝負")
-    @app_commands.describe(ベット="賭け額")
-    async def cmd(self, interaction: discord.Interaction, ベット: int) -> None:
-        err = common.validate_bet(self.bot, ベット)
-        if err:
-            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
-            return
-        await self._run(interaction, ベット)
 
     async def _run(self, interaction: discord.Interaction, bet: int) -> None:
         db = self.bot.db
