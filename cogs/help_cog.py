@@ -153,13 +153,31 @@ def rule_embed(game: str) -> discord.Embed:
     return common.embed(title, body, color=common.COLOR_INFO)
 
 
+def _available_rules(bot) -> list[str]:
+    """このBotで表示すべきルールのキー一覧。
+
+    ENABLED_GAMES に含まれるゲームのみ + 両替(exchange、常時)を返す。
+    順序は _LABELS の定義順を保つ。
+    """
+    cfg = bot.cfg
+    keys: list[str] = []
+    for k in _LABELS:
+        if k == "exchange":
+            keys.append(k)
+        elif cfg.is_game_enabled(k):
+            keys.append(k)
+    return keys
+
+
 class RuleSelect(discord.ui.Select):
-    def __init__(self) -> None:
+    def __init__(self, bot) -> None:
+        keys = _available_rules(bot)
         options = [
             discord.SelectOption(label=_LABELS[g][0], value=g, emoji=_LABELS[g][1])
-            for g in RULES
+            for g in keys
         ]
         super().__init__(placeholder="ルールを見たいゲームを選択", options=options)
+        self._bot = bot
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await interaction.response.edit_message(
@@ -168,9 +186,9 @@ class RuleSelect(discord.ui.Select):
 
 
 class RuleView(discord.ui.View):
-    def __init__(self) -> None:
+    def __init__(self, bot) -> None:
         super().__init__(timeout=180)
-        self.add_item(RuleSelect())
+        self.add_item(RuleSelect(bot))
 
 
 class HelpCog(commands.Cog):
@@ -180,29 +198,19 @@ class HelpCog(commands.Cog):
     async def entry(self, interaction: discord.Interaction) -> None:
         e = common.embed(
             "❓ ルール",
-            "下のメニューからゲームを選ぶと遊び方が表示されます。",
+            "下のメニューからゲームを選ぶと遊び方が表示されます。\n"
+            "(このサーバーで遊べるゲームのみ表示されます)",
             color=common.COLOR_INFO,
         )
-        await interaction.response.send_message(embed=e, view=RuleView(), ephemeral=True)
-
-    @app_commands.command(name="ルール", description="各ゲームの遊び方を表示")
-    @app_commands.describe(ゲーム="特定のゲームを直接指定(省略でメニュー)")
-    @app_commands.choices(
-        ゲーム=[
-            app_commands.Choice(name=_LABELS[g][0], value=g) for g in RULES
-        ]
-    )
-    async def rules(
-        self,
-        interaction: discord.Interaction,
-        ゲーム: app_commands.Choice[str] | None = None,
-    ) -> None:
-        if ゲーム is None:
-            await self.entry(interaction)
-            return
         await interaction.response.send_message(
-            embed=rule_embed(ゲーム.value), view=RuleView(), ephemeral=True
+            embed=e, view=RuleView(self.bot), ephemeral=True
         )
+
+    @app_commands.command(name="ルール", description="このサーバーで遊べるゲームの遊び方を表示")
+    async def rules(self, interaction: discord.Interaction) -> None:
+        # サブコマンド/Choice はBotごとに有効ゲームが違うため動的に出せない。
+        # メニュー一本に統一し、選択肢は ENABLED_GAMES に応じて自動で絞る。
+        await self.entry(interaction)
 
 
 async def setup(bot) -> None:
