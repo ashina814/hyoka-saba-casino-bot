@@ -219,13 +219,13 @@ class BetPresetView(discord.ui.View):
     async def b10k(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self._pick(interaction, 10000)
 
-    @discord.ui.button(label="HALF(残高の半分)", emoji="½",
+    @discord.ui.button(label="HALF(残高の半分)", emoji="⚖️",
                        row=1, style=discord.ButtonStyle.primary)
     async def half(self, interaction: discord.Interaction, _: discord.ui.Button):
         bal = await self.bot.db.get_balance(interaction.user.id)
         await self._pick(interaction, max(1, bal // 2))
 
-    @discord.ui.button(label="MAX(残高全部)", emoji="🅼",
+    @discord.ui.button(label="MAX(残高全部)", emoji="💯",
                        row=1, style=discord.ButtonStyle.danger)
     async def maxbet(self, interaction: discord.Interaction, _: discord.ui.Button):
         bal = await self.bot.db.get_balance(interaction.user.id)
