@@ -5,3 +5,7 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
+*.zip
+*.tar
+*.tar.gz
+*.7z
