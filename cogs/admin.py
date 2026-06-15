@@ -446,6 +446,35 @@ class AdminDashboard(discord.ui.View):
             ephemeral=True,
         )
 
+    @discord.ui.button(label="👥 管理者一覧", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def list_admins(self, interaction: discord.Interaction,
+                          _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            embed=await self.cog.admins_embed(), ephemeral=True
+        )
+
+    @discord.ui.button(label="➕ 管理者追加", row=4,
+                       style=discord.ButtonStyle.success)
+    async def add_admin(self, interaction: discord.Interaction,
+                        _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.send_modal(AddAdminModal(self.cog))
+
+    @discord.ui.button(label="➖ 管理者削除", row=4,
+                       style=discord.ButtonStyle.danger)
+    async def remove_admin(self, interaction: discord.Interaction,
+                           _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.send_modal(RemoveAdminModal(self.cog))
+
     @discord.ui.button(label="🛠️ メンテモード切替", row=4,
                        style=discord.ButtonStyle.secondary)
     async def toggle_maint(self, interaction: discord.Interaction,
@@ -580,6 +609,97 @@ class EconomyDashboardView(discord.ui.View):
         await self.cog.bot.db.write_snapshot_today()
         await interaction.response.send_message(
             "📸 スナップショットを記録しました。", ephemeral=True
+        )
+
+
+class AddAdminModal(discord.ui.Modal, title="➕ 管理者を追加"):
+    user_id = discord.ui.TextInput(
+        label="追加するユーザーID(数字のみ)",
+        placeholder="例: 123456789012345678",
+        required=True, max_length=20,
+    )
+
+    def __init__(self, cog: "AdminCog") -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.user_id.value).strip()
+        if not raw.isdigit():
+            await interaction.response.send_message(
+                "⚠️ ユーザーIDは数字のみで入力してください。", ephemeral=True
+            )
+            return
+        uid = int(raw)
+        bot = self.cog.bot
+        if uid in bot.admin_ids:
+            await interaction.response.send_message(
+                "ℹ️ 既に管理者です。", ephemeral=True
+            )
+            return
+        ok = await bot.db.add_admin(uid, interaction.user.id)
+        if not ok:
+            await interaction.response.send_message(
+                "⚠️ 追加に失敗しました(DB側で重複している可能性)。",
+                ephemeral=True,
+            )
+            return
+        await bot.refresh_admins()
+        await bot.db.log_admin(
+            interaction.user.id, "admin_add", uid, "via dashboard"
+        )
+        await self.cog._post_audit_log(
+            interaction, f"➕ 管理者追加 <@{uid}>"
+        )
+        await interaction.response.send_message(
+            f"✅ <@{uid}> を管理者に追加しました。", ephemeral=True
+        )
+
+
+class RemoveAdminModal(discord.ui.Modal, title="➖ 管理者を削除"):
+    user_id = discord.ui.TextInput(
+        label="削除するユーザーID(.env由来は削除不可)",
+        placeholder="例: 123456789012345678",
+        required=True, max_length=20,
+    )
+
+    def __init__(self, cog: "AdminCog") -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = str(self.user_id.value).strip()
+        if not raw.isdigit():
+            await interaction.response.send_message(
+                "⚠️ ユーザーIDは数字のみで入力してください。", ephemeral=True
+            )
+            return
+        uid = int(raw)
+        bot = self.cog.bot
+        if bot.is_env_admin(uid):
+            await interaction.response.send_message(
+                "🚫 `.env` の `ADMIN_IDS` に登録されている管理者は"
+                "このパネルからは削除できません。\n"
+                "(削除するには `.env` を編集して再起動してください)",
+                ephemeral=True,
+            )
+            return
+        ok = await bot.db.remove_admin(uid)
+        if not ok:
+            await interaction.response.send_message(
+                "ℹ️ そのユーザーはDB管理者として登録されていません。",
+                ephemeral=True,
+            )
+            return
+        await bot.refresh_admins()
+        await bot.db.log_admin(
+            interaction.user.id, "admin_remove", uid, "via dashboard"
+        )
+        await self.cog._post_audit_log(
+            interaction, f"➖ 管理者削除 <@{uid}>"
+        )
+        await interaction.response.send_message(
+            f"✅ <@{uid}> を管理者から外しました。", ephemeral=True
         )
 
 
@@ -1040,6 +1160,41 @@ class AdminCog(commands.Cog):
     async def on_ready(self) -> None:
         if not self._snapshot_loop.is_running():
             self._snapshot_loop.start()
+
+    # ── 管理者一覧 ──
+    async def admins_embed(self) -> discord.Embed:
+        env_ids = sorted(self.bot.cfg.admin_ids)
+        db_records = await self.bot.db.list_admin_records()
+        e = common.embed(
+            "👥 管理者一覧",
+            f"合計 **{len(self.bot.admin_ids)}** 人",
+            color=common.COLOR_ADMIN,
+        )
+        e.add_field(
+            name=f"🔒 .env由来 ({len(env_ids)}人) — 削除不可",
+            value="\n".join(f"<@{uid}> `{uid}`" for uid in env_ids) or "—",
+            inline=False,
+        )
+        if db_records:
+            lines = []
+            for r in db_records:
+                uid = int(r["user_id"])
+                by = int(r["added_by"])
+                lines.append(
+                    f"<@{uid}> `{uid}`  ← <@{by}> が `{r['added_at'][:16]}` に追加"
+                )
+            e.add_field(
+                name=f"⚙️ DB管理(運用追加, {len(db_records)}人) — 削除可",
+                value="\n".join(lines),
+                inline=False,
+            )
+        else:
+            e.add_field(
+                name="⚙️ DB管理(運用追加)",
+                value="(なし)",
+                inline=False,
+            )
+        return e
 
     # ── 設定一覧 ──
     async def settings_embed(self) -> discord.Embed:

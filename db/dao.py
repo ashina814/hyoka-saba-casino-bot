@@ -431,6 +431,38 @@ class Database:
         )
         return list(await cur.fetchall())
 
+    # ───────────────────────── 追加管理者 ─────────────────────────
+    async def list_admins(self) -> list[int]:
+        cur = await self.conn.execute(
+            "SELECT user_id FROM admins ORDER BY added_at"
+        )
+        return [int(r["user_id"]) for r in await cur.fetchall()]
+
+    async def list_admin_records(self) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT user_id, added_by, added_at FROM admins ORDER BY added_at"
+        )
+        return list(await cur.fetchall())
+
+    async def add_admin(self, user_id: int, added_by: int) -> bool:
+        """追加管理者として登録。既に居れば False を返す。"""
+        try:
+            await self.conn.execute(
+                "INSERT INTO admins (user_id, added_by) VALUES (?, ?)",
+                (user_id, added_by),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    async def remove_admin(self, user_id: int) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM admins WHERE user_id = ?", (user_id,)
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
     # ───────────────────────── 自己制限 ─────────────────────────
     async def get_user_limit(self, user_id: int) -> dict[str, Any]:
         cur = await self.conn.execute(

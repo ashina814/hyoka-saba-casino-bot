@@ -26,7 +26,12 @@ def money(cfg, amount: int) -> str:
 
 
 def is_admin(bot: "CasinoBot", user: discord.abc.User) -> bool:
-    return user.id in bot.cfg.admin_ids
+    """env由来 ∪ DB由来 の管理者集合で判定。
+
+    bot.admin_ids は起動時に refresh_admins() で構成され、
+    管理パネルからの追加/削除でも即座に更新される。
+    """
+    return user.id in bot.admin_ids
 
 
 def embed(title: str, desc: str = "", color: int = COLOR_MAIN) -> discord.Embed:

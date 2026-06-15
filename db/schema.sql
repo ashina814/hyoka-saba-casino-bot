@@ -121,6 +121,16 @@ CREATE TABLE IF NOT EXISTS user_limits (
     set_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- ───────────────────────── 追加管理者(DB管理) ─────────────────────────
+-- .env の ADMIN_IDS は初期管理者(削除不可)。ここに足したID は
+-- /管理 パネルから追加・削除できる、運用中に増減する管理者。
+-- 起動時に Bot がここを読み、env と union して bot.admin_ids に保持する。
+CREATE TABLE IF NOT EXISTS admins (
+    user_id   INTEGER PRIMARY KEY,
+    added_by  INTEGER NOT NULL,
+    added_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ───────────────────────── 称号 ─────────────────────────
 CREATE TABLE IF NOT EXISTS badges (
     user_id    INTEGER NOT NULL,

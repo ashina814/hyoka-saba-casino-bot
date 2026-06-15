@@ -65,13 +65,33 @@ class CasinoBot(commands.Bot):
         super().__init__(command_prefix="!casino-unused!", intents=intents)
         self.cfg = cfg
         self.db = Database(cfg.db_path)
+        # 動的に変えられる admin 集合。env(初期) ∪ DB(追加) で構成。
+        # is_admin はこれを参照する。set なので O(1) で判定可能。
+        self.admin_ids: set[int] = set(cfg.admin_ids)
         # 外部通貨ドライバ。未設定なら NoneDriver で全機能が現状の手動承認のまま動く。
         self.currency_driver = make_driver(cfg)
         log.info("外部通貨ドライバ: %s (auto=%s)",
                  self.currency_driver.name, self.currency_driver.auto)
 
+    def is_env_admin(self, user_id: int) -> bool:
+        """そのIDが .env 由来の管理者(=削除不可)か。"""
+        return user_id in self.cfg.admin_ids
+
+    async def refresh_admins(self) -> None:
+        """DB の admins を読み直して bot.admin_ids を再構成。
+
+        起動時と「追加/削除」操作後に呼ぶ。env由来は必ず含む。
+        """
+        db_admins = await self.db.list_admins()
+        self.admin_ids = set(self.cfg.admin_ids) | set(db_admins)
+
     async def setup_hook(self) -> None:
         await self.db.connect()
+        await self.refresh_admins()
+        log.info("管理者: env=%d + db=%d = 計%d人",
+                 len(self.cfg.admin_ids),
+                 len(self.admin_ids) - len(self.cfg.admin_ids),
+                 len(self.admin_ids))
         for ext in _resolve_cogs(self.cfg):
             try:
                 await self.load_extension(ext)
