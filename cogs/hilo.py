@@ -68,15 +68,17 @@ class HiloView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="High ⬆️", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="ハイ (上)", emoji="⬆️",
+                       style=discord.ButtonStyle.success)
     async def high(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.guess(interaction, self, "high")
 
-    @discord.ui.button(label="Low ⬇️", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="ロー (下)", emoji="⬇️",
+                       style=discord.ButtonStyle.primary)
     async def low(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.guess(interaction, self, "low")
 
-    @discord.ui.button(label="Hold(確定)", emoji="💰",
+    @discord.ui.button(label="確定して受け取る", emoji="💰",
                        style=discord.ButtonStyle.secondary)
     async def hold(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.hold(interaction, self)
@@ -139,8 +141,8 @@ class HiloCog(commands.Cog):
         e.add_field(name="連続成功", value=f"🔥 {s.streak}")
         e.add_field(
             name="次の倍率(当たり時)",
-            value=f"High **×{m_high:.2f}** / Low **×{m_low:.2f}**\n"
-                  "(同ランクが出たら無効=Push)",
+            value=f"ハイ **×{m_high:.2f}** / ロー **×{m_low:.2f}**\n"
+                  "(同じランクが出たら無効=引き分け扱いで続行)",
             inline=False,
         )
         e.set_footer(text=msg)
@@ -162,11 +164,11 @@ class HiloCog(commands.Cog):
         mult = _hilo_multiplier(s.current.rank, direction, edge)
         nxt = s.deck.draw(1)[0]
 
-        # 同ランク = Push(継続、配当変化なし、基準は新しいカードへ)
+        # 同ランク = 引き分け(継続、配当変化なし、基準は新しいカードへ)
         if nxt.rank == s.current.rank:
             s.current = nxt
             await interaction.response.edit_message(
-                embed=self._embed(s, "🤝 同ランク Push。賭け額そのまま続行。",
+                embed=self._embed(s, "🤝 同じランク。引き分けで続行(賭け額そのまま)",
                                   color=common.COLOR_INFO),
                 view=view,
             )
@@ -191,9 +193,10 @@ class HiloCog(commands.Cog):
             # ハズレ: 全没収。結果Embedに「もう一回」ボタンを貼る
             s.finished = True
             e = common.embed("📈 ハイロー — 撃沈", color=common.COLOR_LOSE)
+            dir_jp = "ハイ" if direction == "high" else "ロー"
             e.description = (
                 f"# {card_emoji(s.current)}  →  {card_emoji(nxt)}\n"
-                f"予想: **{direction.upper()}** … 外れ"
+                f"予想: **{dir_jp}** … 外れ"
             )
             new_balance = await self.bot.db.get_balance(view.user_id)
             e.add_field(name="ベット", value=common.money(self.bot.cfg, s.bet))

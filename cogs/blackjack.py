@@ -61,7 +61,7 @@ def is_blackjack(cards: list[Card]) -> bool:
 
 def hand_label(cards: list[Card]) -> str:
     v, soft = hand_value(cards)
-    return f"{hand_emoji(cards)}  (**{'soft ' if soft else ''}{v}**)"
+    return f"{hand_emoji(cards)}  (**{'ソフト ' if soft else ''}{v}**)"
 
 
 # ───────────────────────── セッション ─────────────────────────
@@ -144,19 +144,23 @@ class BJView(discord.ui.View):
                     and len(self.s.player_hands) < 4:
                 item.disabled = False
 
-    @discord.ui.button(label="Hit", emoji="➕", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="ヒット(引く)", emoji="➕",
+                       style=discord.ButtonStyle.success)
     async def hit(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.action(interaction, self, "hit")
 
-    @discord.ui.button(label="Stand", emoji="✋", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="スタンド(止める)", emoji="✋",
+                       style=discord.ButtonStyle.primary)
     async def stand(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.action(interaction, self, "stand")
 
-    @discord.ui.button(label="Double", emoji="2️⃣", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="ダブル(倍掛け)", emoji="2️⃣",
+                       style=discord.ButtonStyle.secondary)
     async def double(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.action(interaction, self, "double")
 
-    @discord.ui.button(label="Split", emoji="✂️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="スプリット(分割)", emoji="✂️",
+                       style=discord.ButtonStyle.secondary)
     async def split(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.action(interaction, self, "split")
 
@@ -266,11 +270,11 @@ class BlackjackCog(commands.Cog):
             mark = "👉 " if i == s.current and not (h.busted or h.stood) else ""
             tag = ""
             if h.busted:
-                tag = " 💥BUST"
+                tag = " 💥バースト"
             elif h.stood:
-                tag = " ✋"
+                tag = " ✋止め"
             if h.doubled:
-                tag += " 2️⃣"
+                tag += " 2️⃣倍掛"
             title = f"{mark}🧑 ハンド{i+1}{tag} (賭 {h.bet:,})"
             e.add_field(name=title, value=hand_label(h.cards), inline=False)
 
@@ -386,23 +390,21 @@ class BlackjackCog(commands.Cog):
             res = ""
             credit = 0
             if natural_player and natural_dealer:
-                # 両者ナチュラル: Push
                 credit = h.bet
-                res = "Push(両者BJ)"
+                res = "引き分け(両者ナチュラル)"
             elif natural_player:
-                # 1.5倍勝利
                 credit = h.bet + int(math.floor(h.bet * 1.5))
-                res = f"🎉 ナチュラルBJ 1.5倍 +{credit - h.bet:,}"
+                res = f"🎉 ナチュラル! 1.5倍配当 +{credit - h.bet:,}"
                 any_win = True
             elif natural_dealer:
                 credit = 0
-                res = "💀 ディーラーBJ"
+                res = "💀 ディーラーがナチュラル"
             elif h.busted:
                 credit = 0
-                res = "💥 BUST"
+                res = "💥 バースト"
             elif dealer_bust:
                 credit = h.bet * 2
-                res = f"🎯 勝ち(ディーラーBUST) +{h.bet:,}"
+                res = f"🎯 勝ち(ディーラーがバースト) +{h.bet:,}"
                 any_win = True
             elif pv > dv:
                 credit = h.bet * 2
@@ -413,7 +415,7 @@ class BlackjackCog(commands.Cog):
                 res = "🚫 負け"
             else:
                 credit = h.bet
-                res = "🤝 Push"
+                res = "🤝 引き分け"
             total_credit += credit
             lines.append(f"ハンド{i+1}({pv}): {res}")
 
@@ -437,7 +439,7 @@ class BlackjackCog(commands.Cog):
         e = common.embed("🃏 ブラックジャック — 結果", color=color)
         e.description = (
             f"🤖 ディーラー: {hand_label(s.dealer)}"
-            + (" 💥BUST" if dealer_bust else "")
+            + (" 💥バースト" if dealer_bust else "")
         )
         for i, h in enumerate(s.player_hands):
             e.add_field(

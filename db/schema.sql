@@ -134,6 +134,9 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
     ('exchange_daily_cap',   '50000','int',  '両替の日次上限(方向ごと・受領額ベース)'),
     ('exchange_request_ttl_hours','48','int','申請の有効時間(時間)。超過で自動失効'),
     ('exchange_log_channel_id','0',  'int',  '両替申請の承認チャンネル(0=未設定)'),
-    ('owner_id',             '0',    'int',  'お釈迦さま(焼却受取)のDiscordユーザーID(0=未設定)');
+    ('owner_id',             '0',    'int',  'お釈迦さま(焼却受取)のDiscordユーザーID(0=未設定)'),
+
+    -- 管理操作の安全設計
+    ('admin_confirm_threshold','100000','int','この金額以上の管理操作は理由(reason)入力必須');
 
 INSERT OR IGNORE INTO jackpot (name, amount) VALUES ('slot', 10000);

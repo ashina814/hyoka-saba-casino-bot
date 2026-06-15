@@ -61,6 +61,34 @@ def validate_bet(bot: "CasinoBot", bet: int) -> str | None:
     return None
 
 
+# 取引ログ表示用の日本語ラベル。DB上の reason 文字列(英語)は互換性のため
+# 変更せず、表示時のみここでマッピングする。未知の reason はそのまま英語表示。
+TX_REASON_LABEL = {
+    "initial_grant": "初期付与",
+    "daily": "デイリー",
+    "transfer_in": "送金受取", "transfer_out": "送金",
+    "slot_bet": "スロット 賭",   "slot_win": "スロット 払戻",
+    "slot_jackpot": "スロット JP獲得",
+    "chinchiro_bet": "チンチロ 賭", "chinchiro_win": "チンチロ 払戻",
+    "hilo_bet": "ハイロー 賭",   "hilo_win": "ハイロー 払戻",
+    "blackjack_bet": "BJ 賭",     "blackjack_win": "BJ 払戻",
+    "blackjack_double": "BJ ダブル", "blackjack_split": "BJ スプリット",
+    "pvp_escrow": "PVP 預け",    "pvp_win": "PVP 払戻",
+    "pvp_refund": "PVP 返金",
+    "exchange_in": "両替 受取",  "exchange_escrow": "両替 預け",
+    "exchange_refund": "両替 返金",
+    "holding_tax": "保有税",
+    "admin_give": "管理:付与",   "admin_take": "管理:没収",
+    "admin_set": "管理:セット",
+    "admin_undo": "管理:取消",
+    "bug_compensation_daily": "バグ補填(daily)",
+}
+
+
+def tx_reason_jp(reason: str) -> str:
+    return TX_REASON_LABEL.get(reason, reason)
+
+
 async def respond_with(
     interaction: discord.Interaction,
     *,
