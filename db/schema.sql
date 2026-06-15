@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     last_daily   TEXT,                          -- ISO8601 UTC、最後にデイリーを受け取った時刻
     daily_streak INTEGER NOT NULL DEFAULT 0,    -- 連続ログイン日数
     win_streak   INTEGER NOT NULL DEFAULT 0,    -- 現在の連勝数(全ゲーム共通の演出用)
+    max_win_streak INTEGER NOT NULL DEFAULT 0,  -- 自己最高連勝(統計表示用)
     active_match TEXT,                          -- 参加中の PVP マッチID(二重参加防止)。NULL=なし
     created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -85,6 +86,17 @@ CREATE TABLE IF NOT EXISTS exchange_requests (
 CREATE INDEX IF NOT EXISTS idx_ex_status_user ON exchange_requests(status, user_id);
 CREATE INDEX IF NOT EXISTS idx_ex_created     ON exchange_requests(created_at);
 
+-- ───────────────────────── デイリーチャレンジ受取記録 ─────────────────────────
+-- 同じユーザー × 同じ日 × 同じチャレンジID は一度しか報酬を出さない。
+CREATE TABLE IF NOT EXISTS claimed_challenges (
+    user_id       INTEGER NOT NULL,
+    date          TEXT NOT NULL,           -- 'YYYY-MM-DD' (UTC基準)
+    challenge_id  TEXT NOT NULL,
+    reward        INTEGER NOT NULL,
+    claimed_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, date, challenge_id)
+);
+
 -- ───────────────────────── 管理操作ログ ─────────────────────────
 CREATE TABLE IF NOT EXISTS admin_logs (
     id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,6 +149,9 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
     ('owner_id',             '0',    'int',  'お釈迦さま(焼却受取)のDiscordユーザーID(0=未設定)'),
 
     -- 管理操作の安全設計
-    ('admin_confirm_threshold','100000','int','この金額以上の管理操作は理由(reason)入力必須');
+    ('admin_confirm_threshold','100000','int','この金額以上の管理操作は理由(reason)入力必須'),
+
+    -- デイリーチャレンジ
+    ('challenges_enabled', '1', 'bool', 'デイリーチャレンジ機能 ON/OFF');
 
 INSERT OR IGNORE INTO jackpot (name, amount) VALUES ('slot', 10000);

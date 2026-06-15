@@ -29,6 +29,8 @@ BASE_COGS = [
     "cogs.hub",
     "cogs.help_cog",
     "cogs.exchange",
+    "cogs.stats_cog",
+    "cogs.challenges",
     "cogs.admin",
 ]
 

@@ -112,10 +112,14 @@ class HubView(discord.ui.View):
             "ルール", "❓", 2, discord.ButtonStyle.secondary,
             "hub:rules", "HelpCog",
         ))
-        # 両替(常設、row=3)
+        # 両替・チャレンジ・統計系(row=3)
         self.add_item(_RouteButton(
             "両替", "💱", 3, discord.ButtonStyle.success,
             "hub:exchange", "ExchangeCog",
+        ))
+        self.add_item(_RouteButton(
+            "チャレンジ", "🗓️", 3, discord.ButtonStyle.primary,
+            "hub:challenges", "ChallengesCog",
         ))
 
 

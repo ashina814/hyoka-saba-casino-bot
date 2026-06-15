@@ -89,8 +89,8 @@ class HiloCog(commands.Cog):
         self.bot = bot
 
     async def entry(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(
-            common.BetModal(self.bot, "📈 ハイロー — ベット", self._start)
+        await common.send_bet_panel(
+            interaction, self.bot, self._start, title="📈 ハイロー — ベット"
         )
 
     @app_commands.command(name="ハイロー", description="ハイローを始める")

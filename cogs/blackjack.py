@@ -185,8 +185,8 @@ class BlackjackCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        await interaction.response.send_modal(
-            common.BetModal(self.bot, "🃏 ブラックジャック — ベット", self._start)
+        await common.send_bet_panel(
+            interaction, self.bot, self._start, title="🃏 ブラックジャック — ベット"
         )
 
     @app_commands.command(name="ブラックジャック", description="対ディーラーで21を狙う")

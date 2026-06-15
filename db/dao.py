@@ -36,7 +36,22 @@ class Database:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
         await self._conn.commit()
+        await self._migrate()
         await self._reload_settings()
+
+    async def _migrate(self) -> None:
+        """既存DBに後から追加された列を補う簡易マイグレーション。
+
+        スキーマに追記された ALTER TABLE 系を idempotent に流す。
+        SQLite には IF NOT EXISTS が ALTER にないので、列の有無を見てから流す。
+        """
+        cur = await self._conn.execute("PRAGMA table_info(users)")
+        cols = {r["name"] for r in await cur.fetchall()}
+        if "max_win_streak" not in cols:
+            await self._conn.execute(
+                "ALTER TABLE users ADD COLUMN max_win_streak INTEGER NOT NULL DEFAULT 0"
+            )
+            await self._conn.commit()
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -243,10 +258,81 @@ class Database:
             raise
 
     async def set_win_streak(self, user_id: int, value: int) -> None:
+        # 最高記録も同時に更新(自己統計の表示用)
         await self.conn.execute(
-            "UPDATE users SET win_streak = ? WHERE user_id = ?", (value, user_id)
+            "UPDATE users SET win_streak = ?, "
+            "max_win_streak = CASE WHEN ? > max_win_streak THEN ? ELSE max_win_streak END "
+            "WHERE user_id = ?",
+            (value, value, value, user_id),
         )
         await self.conn.commit()
+
+    async def user_stats(self, user_id: int) -> dict[str, Any]:
+        """自分用統計。ゲーム別収支、JP獲得回数、勝率、最高連勝など。
+
+        ゲーム別収支は `<game>_bet`(負側) と `<game>_win`/`<game>_jackpot` 等(正側)
+        の delta を合算。tx_logs 上の値そのままなので、内部で消滅したシンク分も
+        自然に「負け」に含まれて見える。
+        """
+        await self.ensure_user(user_id)
+        c = self.conn
+
+        async def _sum(where: str) -> int:
+            row = await (await c.execute(
+                f"SELECT COALESCE(SUM(delta),0) s FROM tx_logs "
+                f"WHERE user_id = ? AND {where}", (user_id,)
+            )).fetchone()
+            return int(row["s"])
+
+        async def _cnt(where: str) -> int:
+            row = await (await c.execute(
+                f"SELECT COUNT(*) n FROM tx_logs "
+                f"WHERE user_id = ? AND {where}", (user_id,)
+            )).fetchone()
+            return int(row["n"])
+
+        games = {
+            "slot":      ("slot_bet|slot_win|slot_jackpot",
+                          "slot_bet"),
+            "chinchiro": ("chinchiro_bet|chinchiro_win",
+                          "chinchiro_bet"),
+            "hilo":      ("hilo_bet|hilo_win",
+                          "hilo_bet"),
+            "blackjack": ("blackjack_bet|blackjack_win|blackjack_double|blackjack_split",
+                          "blackjack_bet"),
+            "pvp":       ("pvp_escrow|pvp_win|pvp_refund",
+                          "pvp_escrow"),
+        }
+        per_game: dict[str, dict[str, int]] = {}
+        for key, (delta_reasons, play_reason) in games.items():
+            where_d = "reason IN (" + ",".join(f"'{r}'" for r in delta_reasons.split("|")) + ")"
+            where_p = f"reason = '{play_reason}'"
+            per_game[key] = {
+                "net": await _sum(where_d),
+                "plays": await _cnt(where_p),
+            }
+
+        row = await (await c.execute(
+            "SELECT balance, win_streak, max_win_streak, daily_streak, created_at "
+            "FROM users WHERE user_id = ?", (user_id,)
+        )).fetchone()
+
+        jp = await _cnt("reason='slot_jackpot'")
+        total_bets = -await _sum(
+            "reason IN ('slot_bet','chinchiro_bet','hilo_bet','blackjack_bet',"
+            "'blackjack_double','blackjack_split','pvp_escrow')"
+        )
+
+        return {
+            "balance": int(row["balance"]),
+            "win_streak": int(row["win_streak"]),
+            "max_win_streak": int(row["max_win_streak"]),
+            "daily_streak": int(row["daily_streak"]),
+            "created_at": row["created_at"],
+            "per_game": per_game,
+            "jackpots_won": jp,
+            "total_bet_volume": total_bets,
+        }
 
     # ───────────────────────── jackpot ─────────────────────────
     async def jackpot_amount(self, name: str = "slot") -> int:

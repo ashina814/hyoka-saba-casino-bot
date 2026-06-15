@@ -38,8 +38,8 @@ class ChinchiroCog(commands.Cog):
         self.bot = bot
 
     async def entry(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(
-            common.BetModal(self.bot, "🎲 チンチロ — ベット", self._run)
+        await common.send_bet_panel(
+            interaction, self.bot, self._run, title="🎲 チンチロ — ベット"
         )
 
     @app_commands.command(name="チンチロ", description="親(Bot)とチンチロ勝負")

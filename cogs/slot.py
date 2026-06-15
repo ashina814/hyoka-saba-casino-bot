@@ -75,10 +75,10 @@ class SlotCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
-    # ハブ/コマンド共通の入口: ベットモーダルを開く
+    # ハブ/コマンド共通の入口: ベットプリセット画面を出す
     async def entry(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(
-            common.BetModal(self.bot, "🎰 スロット — ベット", self._run)
+        await common.send_bet_panel(
+            interaction, self.bot, self._run, title="🎰 スロット — ベット"
         )
 
     @app_commands.command(name="スロット", description="スロットを回す")

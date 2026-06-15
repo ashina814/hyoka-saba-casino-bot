@@ -82,6 +82,7 @@ TX_REASON_LABEL = {
     "admin_set": "管理:セット",
     "admin_undo": "管理:取消",
     "bug_compensation_daily": "バグ補填(daily)",
+    "challenge_reward": "チャレンジ報酬",
 }
 
 
@@ -166,6 +167,105 @@ class PlayAgainView(discord.ui.View):
     async def on_timeout(self) -> None:
         for item in self.children:
             item.disabled = True
+
+
+class BetPresetView(discord.ui.View):
+    """賭け額を素早く決めるためのプリセットボタン群。
+
+    on_pick_cb は async (interaction, bet) を受ける、各ゲーム Cog の `_start`。
+    起票者(user_id)のみ操作可。120秒で自動失効。
+    HALF/MAX は現在残高に対する半分/全額、+100/+1k/+1万は固定額のプリセット。
+    """
+
+    def __init__(self, bot, user_id: int, on_pick_cb,
+                 title: str = "ベット額を選択") -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self._cb = on_pick_cb
+        self.title = title
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "他人のセッションは操作できません。", ephemeral=True
+            )
+            return False
+        return True
+
+    async def _pick(self, interaction: discord.Interaction, bet: int) -> None:
+        err = validate_bet(self.bot, bet)
+        if err:
+            await interaction.response.send_message(f"⚠️ {err}", ephemeral=True)
+            return
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+        await self._cb(interaction, bet)
+        self.stop()
+
+    @discord.ui.button(label="+100", row=0, style=discord.ButtonStyle.secondary)
+    async def b100(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._pick(interaction, 100)
+
+    @discord.ui.button(label="+1,000", row=0, style=discord.ButtonStyle.secondary)
+    async def b1k(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._pick(interaction, 1000)
+
+    @discord.ui.button(label="+10,000", row=0, style=discord.ButtonStyle.secondary)
+    async def b10k(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._pick(interaction, 10000)
+
+    @discord.ui.button(label="HALF(残高の半分)", emoji="½",
+                       row=1, style=discord.ButtonStyle.primary)
+    async def half(self, interaction: discord.Interaction, _: discord.ui.Button):
+        bal = await self.bot.db.get_balance(interaction.user.id)
+        await self._pick(interaction, max(1, bal // 2))
+
+    @discord.ui.button(label="MAX(残高全部)", emoji="🅼",
+                       row=1, style=discord.ButtonStyle.danger)
+    async def maxbet(self, interaction: discord.Interaction, _: discord.ui.Button):
+        bal = await self.bot.db.get_balance(interaction.user.id)
+        if bal <= 0:
+            await interaction.response.send_message(
+                "残高が0です。デイリーから始めましょう。", ephemeral=True
+            )
+            return
+        # 最大ベットに丸める
+        hi = int(self.bot.db.setting("max_bet", 100000))
+        await self._pick(interaction, min(bal, hi))
+
+    @discord.ui.button(label="金額を入力", emoji="✏️",
+                       row=1, style=discord.ButtonStyle.success)
+    async def custom(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_modal(BetModal(self.bot, self.title, self._cb))
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+
+
+async def send_bet_panel(
+    interaction: discord.Interaction, bot, on_pick_cb, *, title: str
+) -> None:
+    """各ゲームの `entry` から呼ぶ共通エントリ。ベットプリセット画面を ephemeral で送る。"""
+    view = BetPresetView(bot, interaction.user.id, on_pick_cb, title=title)
+    bal = await bot.db.get_balance(interaction.user.id)
+    lo = int(bot.db.setting("min_bet", 10))
+    hi = int(bot.db.setting("max_bet", 100000))
+    e = embed(
+        title,
+        f"クイック選択するか「✏️ 金額を入力」で自由入力。\n"
+        f"現在残高: **{bal:,}**  /  範囲: {lo:,} 〜 {hi:,}",
+        color=COLOR_INFO,
+    )
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=e, view=view, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=e, view=view, ephemeral=True)
 
 
 class BetModal(discord.ui.Modal):
