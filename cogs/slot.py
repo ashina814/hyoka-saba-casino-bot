@@ -141,6 +141,9 @@ class SlotCog(commands.Cog):
         cfg = self.bot.cfg
         target_rtp = max(0.0, 1.0 - float(db.setting("slot_house_edge", 0.05)))
         scale = (target_rtp / _BASE_RTP) if _BASE_RTP > 0 else 1.0
+        # 運営ブースト(配当のみに適用、JP獲得額はプール元本なので非適用)
+        boost = common.boost_multiplier(self.bot)
+        scale *= boost
 
         payout = 0
         jackpot_won = 0
@@ -205,11 +208,41 @@ class SlotCog(commands.Cog):
         elif not jackpot_won and db.setting("jackpot_enabled", True):
             jp = await db.jackpot_amount("slot")
             e.set_footer(text=f"💎 現在のジャックポット: {jp:,}")
+        # JP当選やストリーク達成をお喋りログ&DM通知
+        await self._announce(user, bet, total_credit, jackpot_won, streak)
+
         view = common.PlayAgainView(self.bot, user.id, bet, self._run)
         try:
             await msg.edit(embed=e, view=view)
         except discord.HTTPException:
             pass
+
+
+    async def _announce(self, user, bet: int, total_credit: int,
+                        jackpot_won: int, streak: int) -> None:
+        """JP当選とストリーク節目だけ お喋りログ&DMで派手に通知。"""
+        cfg = self.bot.cfg
+        if jackpot_won:
+            e = common.embed(
+                "💎 JACKPOT 💎",
+                f"{user.mention} がスロットで **ジャックポット {jackpot_won:,} 獲得**！",
+                color=common.COLOR_JACKPOT,
+            )
+            await common.post_casino_log(self.bot, embed=e)
+            dm = common.embed(
+                "💎 ジャックポット獲得！",
+                f"スロットで **{jackpot_won:,}** のジャックポットを獲得しました！\n"
+                f"おめでとうございます🎉",
+                color=common.COLOR_JACKPOT,
+            )
+            await common.dm_user(self.bot, user.id, dm)
+        elif streak in (5, 10, 20, 50):
+            e = common.embed(
+                "🔥 連勝記録",
+                f"{user.mention} がスロットで **{streak}連勝** を達成！",
+                color=common.COLOR_WIN,
+            )
+            await common.post_casino_log(self.bot, embed=e)
 
 
 async def setup(bot) -> None:

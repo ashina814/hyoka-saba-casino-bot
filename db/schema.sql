@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS exchange_requests (
 CREATE INDEX IF NOT EXISTS idx_ex_status_user ON exchange_requests(status, user_id);
 CREATE INDEX IF NOT EXISTS idx_ex_created     ON exchange_requests(created_at);
 
+-- ───────────────────────── おみくじ受取記録 ─────────────────────────
+-- ユーザー × 日付 で1日1回。決定論的に結果を選ぶので結果自体はテーブルに入れない。
+CREATE TABLE IF NOT EXISTS omikuji_claimed (
+    user_id  INTEGER NOT NULL,
+    date     TEXT NOT NULL,    -- 'YYYY-MM-DD' UTC
+    result   TEXT NOT NULL,
+    bonus    INTEGER NOT NULL DEFAULT 0,
+    ts       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, date)
+);
+
 -- ───────────────────────── 経済スナップショット(日次自動) ─────────────────────────
 -- 1日1回、その時点の経済指標を記録。前日比/週次比などの推移分析に使う。
 CREATE TABLE IF NOT EXISTS economy_snapshots (
@@ -167,6 +178,13 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
     ('admin_confirm_threshold','100000','int','この金額以上の管理操作は理由(reason)入力必須'),
 
     -- デイリーチャレンジ
-    ('challenges_enabled', '1', 'bool', 'デイリーチャレンジ機能 ON/OFF');
+    ('challenges_enabled', '1', 'bool', 'デイリーチャレンジ機能 ON/OFF'),
+
+    -- 運営ブースト(時間限定イベント): 1.0=無効、1.5=配当1.5倍など
+    ('boost_multiplier', '1.0', 'float', '現在のブースト倍率(1.0で無効)'),
+    ('boost_until_ts',   '0',   'int',   'ブースト終了時刻(Unix秒、0で無効)'),
+
+    -- お喋りログ(プレイヤー向け公開チャンネル)
+    ('casino_log_channel_id', '0', 'int', 'お喋りログ送信先チャンネル(0=未設定)');
 
 INSERT OR IGNORE INTO jackpot (name, amount) VALUES ('slot', 10000);

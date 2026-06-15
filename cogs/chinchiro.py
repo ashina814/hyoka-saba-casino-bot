@@ -121,7 +121,8 @@ class ChinchiroCog(commands.Cog):
             outcome, color = "ヒフミ… 2倍払い", common.COLOR_LOSE
         elif cmp > 0:
             mult = max(1, child_res.payout_mult)
-            win = int(bet * mult * (1 - edge))
+            boost = common.boost_multiplier(self.bot)
+            win = int(bet * mult * (1 - edge) * boost)
             credit = bet + win
             outcome, color = f"勝ち！ ×{mult}", common.COLOR_WIN
         elif cmp < 0:

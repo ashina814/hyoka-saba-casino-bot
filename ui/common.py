@@ -83,11 +83,64 @@ TX_REASON_LABEL = {
     "admin_undo": "管理:取消",
     "bug_compensation_daily": "バグ補填(daily)",
     "challenge_reward": "チャレンジ報酬",
+    "omikuji_bonus": "おみくじボーナス",
 }
 
 
 def tx_reason_jp(reason: str) -> str:
     return TX_REASON_LABEL.get(reason, reason)
+
+
+async def post_casino_log(bot, embed: discord.Embed | None = None,
+                          content: str | None = None) -> None:
+    """お喋りログチャンネルへ投稿。未設定なら何もしない。
+
+    JP当選、連勝達成、ブースト開始、その他「盛り上げる出来事」を Bot が代弁する。
+    `casino_log_channel_id` が運営用の `exchange_log_channel_id` と別なのは、
+    プレイヤー向けに公開して見てもらうためのチャンネル想定だから(運営チャンネルとは別)。
+    """
+    ch_id = int(bot.db.setting("casino_log_channel_id", 0) or 0)
+    if not ch_id:
+        return
+    ch = bot.get_channel(ch_id)
+    if ch is None:
+        try:
+            ch = await bot.fetch_channel(ch_id)
+        except (discord.NotFound, discord.Forbidden):
+            return
+    try:
+        await ch.send(content=content, embed=embed)
+    except discord.HTTPException:
+        pass
+
+
+async def dm_user(bot, user_id: int, embed: discord.Embed) -> bool:
+    """ユーザーへDM。失敗(DM拒否設定など)しても True/False を返すだけで例外は呑む。"""
+    try:
+        user = bot.get_user(user_id) or await bot.fetch_user(user_id)
+        await user.send(embed=embed)
+        return True
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        return False
+
+
+def boost_multiplier(bot) -> float:
+    """有効中ブーストの倍率を返す。無効/期限切れなら 1.0。
+
+    PVE 各ゲームの払戻計算で `payout *= boost_multiplier(bot)` する。
+    """
+    import time as _t
+    until = int(bot.db.setting("boost_until_ts", 0) or 0)
+    if until <= 0 or _t.time() >= until:
+        return 1.0
+    return float(bot.db.setting("boost_multiplier", 1.0) or 1.0)
+
+
+def boost_remaining_sec(bot) -> int:
+    """ブースト残り秒数(0=ブースト無効)。"""
+    import time as _t
+    until = int(bot.db.setting("boost_until_ts", 0) or 0)
+    return max(0, until - int(_t.time()))
 
 
 async def respond_with(

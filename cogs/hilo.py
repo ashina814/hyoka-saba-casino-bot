@@ -168,7 +168,9 @@ class HiloCog(commands.Cog):
         is_win = (direction == "high" and nxt.rank > s.current.rank) or \
                  (direction == "low" and nxt.rank < s.current.rank)
         if is_win:
-            s.payout = int(s.payout * mult)
+            # 運営ブーストがあれば倍率に乗算
+            boost = common.boost_multiplier(self.bot)
+            s.payout = int(s.payout * mult * boost)
             s.streak += 1
             s.current = nxt
             await interaction.response.edit_message(

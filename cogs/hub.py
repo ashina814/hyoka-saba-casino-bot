@@ -121,6 +121,10 @@ class HubView(discord.ui.View):
             "チャレンジ", "🗓️", 3, discord.ButtonStyle.primary,
             "hub:challenges", "ChallengesCog",
         ))
+        self.add_item(_RouteButton(
+            "おみくじ", "🎴", 3, discord.ButtonStyle.secondary,
+            "hub:omikuji", "OmikujiCog",
+        ))
 
 
 def hub_embed(bot) -> discord.Embed:
@@ -131,6 +135,16 @@ def hub_embed(bot) -> discord.Embed:
         "初回は自動で初期チップが配られます。毎日 **デイリー** を忘れずに！",
         color=common.COLOR_MAIN,
     )
+    # ブースト中ならハブパネル冒頭に大きく告知
+    boost = common.boost_multiplier(bot)
+    if boost > 1.0:
+        remain = common.boost_remaining_sec(bot)
+        h, m = remain // 3600, (remain % 3600) // 60
+        e.add_field(
+            name=f"🚀 イベント開催中! 配当 ×{boost}",
+            value=f"残り **{h}時間{m}分**。PVE 全ゲームで配当アップ中！",
+            inline=False,
+        )
     # 有効ゲームだけ説明を並べる
     for key, label, emoji, _cog, _row, _style, desc in GAME_BUTTONS:
         if not cfg.is_game_enabled(key):

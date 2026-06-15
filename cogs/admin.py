@@ -373,11 +373,117 @@ class AdminDashboard(discord.ui.View):
             embed=await self.cog.pending_exchange_embed(), ephemeral=True
         )
 
-    # row 4: その他
+    # row 4: イベント & システム
+    @discord.ui.button(label="🚀 ブースト開始", row=4,
+                       style=discord.ButtonStyle.success)
+    async def boost_start(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        await interaction.response.send_modal(BoostStartModal(self.cog))
+
+    @discord.ui.button(label="🛑 ブースト終了", row=4,
+                       style=discord.ButtonStyle.danger)
+    async def boost_end(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        was_active = common.boost_remaining_sec(self.cog.bot) > 0
+        await self.cog.bot.db.set_setting("boost_until_ts", "0")
+        await self.cog.bot.db.set_setting("boost_multiplier", "1.0")
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "boost_end", None, ""
+        )
+        if was_active:
+            e = common.embed(
+                "🛑 イベント終了",
+                "配当ブーストが終了しました。お疲れさまでした！",
+                color=common.COLOR_INFO,
+            )
+            await common.post_casino_log(self.cog.bot, embed=e)
+        await self.cog._post_audit_log(interaction, "🛑 ブースト終了")
+        await interaction.response.send_message(
+            "✅ ブーストを停止しました。", ephemeral=True
+        )
+
+    @discord.ui.button(label="お喋りCH をここに", emoji="📢", row=4,
+                       style=discord.ButtonStyle.primary)
+    async def set_chat_ch(self, interaction: discord.Interaction, _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        ch = interaction.channel
+        if ch is None or not hasattr(ch, "id"):
+            await interaction.response.send_message(
+                "⚠️ このチャンネルは設定先にできません。", ephemeral=True
+            )
+            return
+        await self.cog.bot.db.set_setting("casino_log_channel_id", str(ch.id))
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "config", None, f"casino_log_channel_id={ch.id}"
+        )
+        await interaction.response.send_message(
+            f"✅ お喋りログを <#{ch.id}> に設定しました。", ephemeral=True
+        )
+
     @discord.ui.button(label="Cogリロード", emoji="🔄", row=4,
                        style=discord.ButtonStyle.secondary)
     async def reload(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(ReloadModal(self.cog))
+
+
+class BoostStartModal(discord.ui.Modal, title="🚀 ブースト開始"):
+    multiplier = discord.ui.TextInput(
+        label="配当倍率(例: 1.5 = 1.5倍デー)",
+        placeholder="1.0で無効、1.5や2.0など",
+        required=True, max_length=6,
+    )
+    hours = discord.ui.TextInput(
+        label="期間(時間)",
+        placeholder="例: 24",
+        required=True, max_length=4,
+    )
+
+    def __init__(self, cog: "AdminCog") -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        try:
+            mult = float(str(self.multiplier.value))
+            hours = int(str(self.hours.value))
+        except ValueError:
+            await interaction.response.send_message(
+                "⚠️ 倍率は小数、期間は整数で。", ephemeral=True
+            )
+            return
+        if mult <= 0 or hours <= 0:
+            await interaction.response.send_message(
+                "⚠️ 倍率と期間は正の数で。", ephemeral=True
+            )
+            return
+        import time as _t
+        until_ts = int(_t.time()) + hours * 3600
+        await self.cog.bot.db.set_setting("boost_multiplier", str(mult))
+        await self.cog.bot.db.set_setting("boost_until_ts", str(until_ts))
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "boost_start", None,
+            f"×{mult} for {hours}h",
+        )
+        # お喋りログに大々的に告知
+        e = common.embed(
+            "🚀 イベント発動！",
+            f"いま開始！ **{hours}時間限定で 配当 ×{mult} デー** 🎉\n"
+            "PVE全ゲーム(スロット/チンチロ/ハイロー/BJ)で配当が増えます。",
+            color=common.COLOR_JACKPOT,
+        )
+        await common.post_casino_log(self.cog.bot, embed=e)
+        await self.cog._post_audit_log(
+            interaction, f"🚀 ブースト開始 ×{mult} for {hours}h"
+        )
+        await interaction.response.send_message(
+            f"✅ ブースト開始: ×{mult} を {hours}時間。", ephemeral=True
+        )
 
 
 class EconomyDashboardView(discord.ui.View):

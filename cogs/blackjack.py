@@ -368,9 +368,19 @@ class BlackjackCog(commands.Cog):
         dv, _ = hand_value(s.dealer)
         dealer_bust = dv > 21
 
+        # 運営ブーストは「勝ち分(=純配当部分)」にのみ乗算。
+        # 引き分けは賭けが戻るだけなのでブースト対象外。
+        boost = common.boost_multiplier(self.bot)
+
+        def _win_credit(bet_amt: int, mult: float) -> int:
+            """bet_amt を基準に、純配当 = bet*mult を boost で増やし、元本と合算。"""
+            pure_payout = bet_amt * mult * boost
+            return int(bet_amt + pure_payout)
+
         lines: list[str] = []
         total_credit = 0
         any_win = False
+        had_natural = False
         for i, h in enumerate(s.player_hands):
             pv = h.value
             res = ""
@@ -379,9 +389,10 @@ class BlackjackCog(commands.Cog):
                 credit = h.bet
                 res = "引き分け(両者ナチュラル)"
             elif natural_player:
-                credit = h.bet + int(math.floor(h.bet * 1.5))
+                credit = _win_credit(h.bet, 1.5)
                 res = f"🎉 ナチュラル! 1.5倍配当 +{credit - h.bet:,}"
                 any_win = True
+                had_natural = True
             elif natural_dealer:
                 credit = 0
                 res = "💀 ディーラーがナチュラル"
@@ -389,12 +400,12 @@ class BlackjackCog(commands.Cog):
                 credit = 0
                 res = "💥 バースト"
             elif dealer_bust:
-                credit = h.bet * 2
-                res = f"🎯 勝ち(ディーラーがバースト) +{h.bet:,}"
+                credit = _win_credit(h.bet, 1.0)
+                res = f"🎯 勝ち(ディーラーがバースト) +{credit - h.bet:,}"
                 any_win = True
             elif pv > dv:
-                credit = h.bet * 2
-                res = f"🎯 勝ち +{h.bet:,}"
+                credit = _win_credit(h.bet, 1.0)
+                res = f"🎯 勝ち +{credit - h.bet:,}"
                 any_win = True
             elif pv < dv:
                 credit = 0
@@ -441,6 +452,17 @@ class BlackjackCog(commands.Cog):
 
         # 後始末: セッション削除
         self.sessions.pop(user_id, None)
+
+        # ナチュラルBJ達成をお喋りログに通知
+        if had_natural:
+            user_obj = self.bot.get_user(user_id)
+            mention = user_obj.mention if user_obj else f"<@{user_id}>"
+            log_e = common.embed(
+                "🃏 ナチュラルブラックジャック",
+                f"{mention} がBJで **ナチュラル** を引いて 1.5倍配当！",
+                color=common.COLOR_WIN,
+            )
+            await common.post_casino_log(self.bot, embed=log_e)
 
         # 元メッセージを「結果 + もう一回」に上書き
         again = common.PlayAgainView(self.bot, user_id, s.bet, self._start)
