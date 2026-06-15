@@ -128,7 +128,8 @@ class HiloCog(commands.Cog):
         e = common.embed("📈 ハイロー", color=color)
         e.description = (
             f"# {card_emoji(s.current)}\n"
-            f"**基準: {RANK_LABEL[s.current.rank]}{s.current.suit}**"
+            f"**基準: {RANK_LABEL[s.current.rank]}{s.current.suit}**\n"
+            "_順位: 2 < 3 < … < 10 < J < Q < K < **A(最強)**_"
         )
         e.add_field(name="ベット", value=common.money(cfg, s.bet))
         e.add_field(name="現在配当", value=common.money(cfg, s.payout))
