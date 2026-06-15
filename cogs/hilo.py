@@ -59,6 +59,15 @@ class HiloView(discord.ui.View):
         self.cog = cog
         self.s = session
         self.user_id = user_id
+        # 初手は Hold 不可(ベットしてから即返却=ノーリスク偵察を防ぐ設計)
+        # 1回でも当てたら enable する。
+        self._sync_hold_state()
+
+    def _sync_hold_state(self) -> None:
+        for item in self.children:
+            if getattr(item, "custom_id", None) == "hilo:hold" \
+                    or getattr(item, "label", "") == "確定して受け取る":
+                item.disabled = (self.s.streak == 0)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -79,8 +88,16 @@ class HiloView(discord.ui.View):
         await self.cog.guess(interaction, self, "low")
 
     @discord.ui.button(label="確定して受け取る", emoji="💰",
+                       custom_id="hilo:hold",
                        style=discord.ButtonStyle.secondary)
     async def hold(self, interaction: discord.Interaction, _: discord.ui.Button):
+        # ボタンが押された時点でも念のため判定(disabled 回避クライアント対策)
+        if self.s.streak == 0:
+            await interaction.response.send_message(
+                "🚫 最初の1回は予想が必要です。ハイかローを選んでください。",
+                ephemeral=True,
+            )
+            return
         await self.cog.hold(interaction, self)
 
 
@@ -179,6 +196,8 @@ class HiloCog(commands.Cog):
             s.payout = int(s.payout * mult * boost)
             s.streak += 1
             s.current = nxt
+            # 1回当たったので Hold を解禁
+            view._sync_hold_state()
             await interaction.response.edit_message(
                 embed=self._embed(
                     s,
