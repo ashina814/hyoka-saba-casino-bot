@@ -58,15 +58,15 @@ class ChinchiroCog(commands.Cog):
 
         async with db.user_lock(user.id):
             if await db.is_frozen(user.id):
-                await interaction.response.send_message(
-                    "🧊 あなたは凍結中です。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="🧊 あなたは凍結中です。", ephemeral=True
                 )
                 return
             try:
                 await db.adjust_balance(user.id, -bet, "chinchiro_bet")
             except InsufficientFunds:
-                await interaction.response.send_message(
-                    "残高が足りません。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
 
@@ -94,23 +94,29 @@ class ChinchiroCog(commands.Cog):
                 e.set_footer(text=footer)
             return e
 
-        # 親の投を順次表示
-        await interaction.response.send_message(embed=render(0, 0, "親が振ります…"))
+        # 初回 or「もう一回」両対応で送信し、以降は msg.edit で更新
+        msg = await common.respond_with(interaction, embed=render(0, 0, "親が振ります…"))
+        if msg is None:
+            msg = await interaction.original_response()
         for i in range(1, len(parent_throws) + 1):
             await asyncio.sleep(0.6)
-            await interaction.edit_original_response(
-                embed=render(i, 0, f"親の役: {parent_res.label if i == len(parent_throws) else '振り直し…'}")
-            )
-        # 子の投を順次表示
+            try:
+                await msg.edit(
+                    embed=render(i, 0,
+                                 f"親の役: {parent_res.label if i == len(parent_throws) else '振り直し…'}")
+                )
+            except discord.HTTPException:
+                pass
         for i in range(1, len(child_throws) + 1):
             await asyncio.sleep(0.6)
-            await interaction.edit_original_response(
-                embed=render(len(parent_throws), i, "あなたが振ります…")
-            )
+            try:
+                await msg.edit(embed=render(len(parent_throws), i, "あなたが振ります…"))
+            except discord.HTTPException:
+                pass
 
-        await self._settle(interaction, user, bet, parent_res, child_res, render)
+        await self._settle(msg, user, bet, parent_res, child_res, render)
 
-    async def _settle(self, interaction, user, bet, parent_res, child_res, render):
+    async def _settle(self, msg, user, bet, parent_res, child_res, render):
         db = self.bot.db
         cfg = self.bot.cfg
         edge = float(db.setting("chinchiro_house_edge", 0.05))
@@ -161,7 +167,11 @@ class ChinchiroCog(commands.Cog):
         e.add_field(name="残高", value=common.money(cfg, new_balance))
         if streak >= 2 and cmp > 0:
             e.set_footer(text=f"🔥 {streak}連勝中！")
-        await interaction.edit_original_response(embed=e)
+        view = common.PlayAgainView(self.bot, user.id, bet, self._run)
+        try:
+            await msg.edit(embed=e, view=view)
+        except discord.HTTPException:
+            pass
 
 
 async def setup(bot) -> None:

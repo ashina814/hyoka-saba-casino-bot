@@ -205,13 +205,15 @@ class BlackjackCog(commands.Cog):
         user = interaction.user
         async with db.user_lock(user.id):
             if await db.is_frozen(user.id):
-                await interaction.response.send_message("🧊 凍結中です。", ephemeral=True)
+                await common.respond_with(
+                    interaction, content="🧊 凍結中です。", ephemeral=True
+                )
                 return
             try:
                 await db.adjust_balance(user.id, -bet, "blackjack_bet")
             except InsufficientFunds:
-                await interaction.response.send_message(
-                    "残高が足りません。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
 
@@ -226,9 +228,12 @@ class BlackjackCog(commands.Cog):
             s.player_hands[0].stood = True
             s.reveal_dealer = True
             s.finished = True
-            await interaction.response.send_message(embed=self._table_embed(s))
-            await self._settle(interaction, user.id, s, edit=True,
-                               natural_player=player_bj, natural_dealer=dealer_bj)
+            msg = await common.respond_with(interaction, embed=self._table_embed(s))
+            if msg is None:
+                msg = await interaction.original_response()
+            await self._settle_msg(msg, user.id, s,
+                                   natural_player=player_bj,
+                                   natural_dealer=dealer_bj)
             return
 
         view = BJView(self, s, user.id)
@@ -236,7 +241,13 @@ class BlackjackCog(commands.Cog):
         for item, key in zip(view.children, ["hit", "stand", "double", "split"]):
             item.custom_id_local = key  # type: ignore[attr-defined]
         view.refresh_buttons()
-        await interaction.response.send_message(embed=self._table_embed(s), view=view)
+        msg = await common.respond_with(
+            interaction, embed=self._table_embed(s), view=view
+        )
+        if msg is None:
+            msg = await interaction.original_response()
+        # アクション側からも結果メッセージを参照できるように保持
+        s.message = msg  # type: ignore[attr-defined]
 
     # ── 表示 ──
     def _table_embed(self, s: BJSession, footer: str = "") -> discord.Embed:
@@ -337,10 +348,10 @@ class BlackjackCog(commands.Cog):
             s.finished = True
             for item in view.children:
                 item.disabled = True
-            await interaction.response.edit_message(
-                embed=self._table_embed(s, "ディーラーの番"), view=view
-            )
-            await self._settle(interaction, view.user_id, s, edit=False)
+            # 進行画面は中継せず、直接「結果+もう一回」に上書きする方が分かりやすい
+            await interaction.response.defer()
+            msg = getattr(s, "message", None) or await interaction.original_response()
+            await self._settle_msg(msg, view.user_id, s)
             view.stop()
             return
 
@@ -357,10 +368,10 @@ class BlackjackCog(commands.Cog):
                 return
             s.dealer.append(s.deck.draw(1)[0])
 
-    # ── 精算 ──
-    async def _settle(
-        self, interaction: discord.Interaction, user_id: int, s: BJSession,
-        edit: bool, natural_player: bool = False, natural_dealer: bool = False,
+    # ── 精算(メッセージ直接編集版) ──
+    async def _settle_msg(
+        self, msg, user_id: int, s: BJSession,
+        natural_player: bool = False, natural_dealer: bool = False,
     ) -> None:
         db = self.bot.db
         cfg = self.bot.cfg
@@ -443,17 +454,12 @@ class BlackjackCog(commands.Cog):
         # 後始末: セッション削除
         self.sessions.pop(user_id, None)
 
+        # 元メッセージを「結果 + もう一回」に上書き
+        again = common.PlayAgainView(self.bot, user_id, s.bet, self._start)
         try:
-            if edit:
-                await interaction.edit_original_response(embed=e, view=None)
-            else:
-                # action 経路では既に edit_message 済み。followup で結果通知
-                await interaction.followup.send(embed=e)
+            await msg.edit(embed=e, view=again)
         except discord.HTTPException:
-            try:
-                await interaction.followup.send(embed=e)
-            except discord.HTTPException:
-                pass
+            pass
 
 
 async def setup(bot) -> None:

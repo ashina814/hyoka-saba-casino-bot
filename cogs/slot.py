@@ -97,15 +97,15 @@ class SlotCog(commands.Cog):
 
         async with db.user_lock(user.id):
             if await db.is_frozen(user.id):
-                await interaction.response.send_message(
-                    "🧊 あなたは凍結中です。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="🧊 あなたは凍結中です。", ephemeral=True
                 )
                 return
             try:
                 await db.adjust_balance(user.id, -bet, "slot_bet")
             except InsufficientFunds:
-                await interaction.response.send_message(
-                    "残高が足りません。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
             # ベットの一部をジャックポットへ積む(再分配)
@@ -124,7 +124,12 @@ class SlotCog(commands.Cog):
             e.add_field(name="ベット", value=common.money(cfg, bet))
             return e
 
-        await interaction.response.send_message(embed=render(0))
+        # 初回(モーダル経由)は response.send_message、
+        # 「もう一回」(既に response 済み)は followup.send で送る。
+        # 送信したメッセージを以降 msg.edit で段階表示する。
+        msg = await common.respond_with(interaction, embed=render(0))
+        if msg is None:
+            msg = await interaction.original_response()
         for shown in range(1, 4):
             await asyncio.sleep(0.7)
             emb = render(shown)
@@ -132,12 +137,15 @@ class SlotCog(commands.Cog):
                 "7️⃣", JACKPOT_SYMBOL, "⭐"
             ):
                 emb.set_footer(text="🔥 リーチ！あと1つ…！")
-            await interaction.edit_original_response(embed=emb)
+            try:
+                await msg.edit(embed=emb)
+            except discord.HTTPException:
+                pass
 
         # ── 精算 ──
-        await self._settle(interaction, user, bet, reels)
+        await self._settle(msg, user, bet, reels)
 
-    async def _settle(self, interaction, user, bet: int, reels: list[str]) -> None:
+    async def _settle(self, msg, user, bet: int, reels: list[str]) -> None:
         db = self.bot.db
         cfg = self.bot.cfg
         target_rtp = max(0.0, 1.0 - float(db.setting("slot_house_edge", 0.05)))
@@ -206,7 +214,11 @@ class SlotCog(commands.Cog):
         elif not jackpot_won and db.setting("jackpot_enabled", True):
             jp = await db.jackpot_amount("slot")
             e.set_footer(text=f"💎 現在のジャックポット: {jp:,}")
-        await interaction.edit_original_response(embed=e)
+        view = common.PlayAgainView(self.bot, user.id, bet, self._run)
+        try:
+            await msg.edit(embed=e, view=view)
+        except discord.HTTPException:
+            pass
 
 
 async def setup(bot) -> None:

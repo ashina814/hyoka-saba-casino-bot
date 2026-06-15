@@ -105,20 +105,21 @@ class HiloCog(commands.Cog):
         user = interaction.user
         async with db.user_lock(user.id):
             if await db.is_frozen(user.id):
-                await interaction.response.send_message(
-                    "🧊 凍結中です。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="🧊 凍結中です。", ephemeral=True
                 )
                 return
             try:
                 await db.adjust_balance(user.id, -bet, "hilo_bet")
             except InsufficientFunds:
-                await interaction.response.send_message(
-                    "残高が足りません。", ephemeral=True
+                await common.respond_with(
+                    interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
         session = HiloSession(bet)
         view = HiloView(self, session, user.id)
-        await interaction.response.send_message(
+        await common.respond_with(
+            interaction,
             embed=self._embed(session, "High か Low を選んでください"),
             view=view,
         )
@@ -187,10 +188,8 @@ class HiloCog(commands.Cog):
                 view=view,
             )
         else:
-            # ハズレ: 全没収
+            # ハズレ: 全没収。結果Embedに「もう一回」ボタンを貼る
             s.finished = True
-            for item in view.children:
-                item.disabled = True
             e = common.embed("📈 ハイロー — 撃沈", color=common.COLOR_LOSE)
             e.description = (
                 f"# {card_emoji(s.current)}  →  {card_emoji(nxt)}\n"
@@ -201,7 +200,8 @@ class HiloCog(commands.Cog):
             e.add_field(name="収支", value=f"📉 -{s.bet:,}")
             e.add_field(name="残高", value=common.money(self.bot.cfg, new_balance))
             await self.bot.db.set_win_streak(view.user_id, 0)
-            await interaction.response.edit_message(embed=e, view=view)
+            again = common.PlayAgainView(self.bot, view.user_id, s.bet, self._start)
+            await interaction.response.edit_message(embed=e, view=again)
             view.stop()
 
     async def hold(self, interaction: discord.Interaction, view: HiloView) -> None:
@@ -230,7 +230,8 @@ class HiloCog(commands.Cog):
         e.add_field(name="収支", value=("📈 +" if net >= 0 else "📉 ") + f"{net:,}")
         e.add_field(name="残高", value=common.money(self.bot.cfg, new_balance))
         e.add_field(name="連勝", value=f"🔥 {s.streak}", inline=False)
-        await interaction.response.edit_message(embed=e, view=view)
+        again = common.PlayAgainView(self.bot, view.user_id, s.bet, self._start)
+        await interaction.response.edit_message(embed=e, view=again)
         view.stop()
 
 

@@ -61,6 +61,85 @@ def validate_bet(bot: "CasinoBot", bet: int) -> str | None:
     return None
 
 
+async def respond_with(
+    interaction: discord.Interaction,
+    *,
+    content: str | None = None,
+    embed: discord.Embed | None = None,
+    view: discord.ui.View | None = None,
+    ephemeral: bool = False,
+) -> discord.Message | None:
+    """response 済みなら followup、未応答なら response.send_message で送る。
+
+    PVE ゲームの `_start` を、初回(モーダル経由)と「もう一回」(既に response 済み)
+    双方から呼べるようにするためのヘルパー。送信したメッセージを返す
+    (followup の場合は Message、response.send_message の場合は None)。
+    """
+    kwargs: dict = {}
+    if content is not None:
+        kwargs["content"] = content
+    if embed is not None:
+        kwargs["embed"] = embed
+    if view is not None:
+        kwargs["view"] = view
+    if ephemeral:
+        kwargs["ephemeral"] = True
+    if interaction.response.is_done():
+        return await interaction.followup.send(**kwargs)
+    await interaction.response.send_message(**kwargs)
+    return None
+
+
+class PlayAgainView(discord.ui.View):
+    """PVE 結果画面に貼る『もう一回(同額) / ベット変更』ボタン。
+
+    on_start_cb は async (interaction, bet) を受ける、各ゲーム Cog の `_start`。
+    既に response 済みの interaction が渡るので、_start 側は respond_with() を
+    使ってフォロワー送信に対応していること。
+    """
+
+    def __init__(self, bot, user_id: int, last_bet: int, on_start_cb) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.user_id = user_id
+        self.last_bet = last_bet
+        self._cb = on_start_cb
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "他人のセッションは操作できません。", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="もう一回(同額)", emoji="🔁",
+                       style=discord.ButtonStyle.success)
+    async def again(self, interaction: discord.Interaction, _: discord.ui.Button):
+        # 自分のボタンを無効化(結果メッセージを編集)してから、次ゲームを開始
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+        await self._cb(interaction, self.last_bet)
+        self.stop()
+
+    @discord.ui.button(label="ベット変更", emoji="✏️",
+                       style=discord.ButtonStyle.primary)
+    async def change(self, interaction: discord.Interaction, _: discord.ui.Button):
+        # モーダルを開く。送信後 _cb が呼ばれる。
+        await interaction.response.send_modal(
+            BetModal(self.bot, "ベット変更", self._cb)
+        )
+        # 古い結果メッセージのボタンは timeout で自動的に無効化される
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True
+
+
 class BetModal(discord.ui.Modal):
     """ベット額入力モーダル。送信で on_submit_cb(interaction, amount) を呼ぶ。
 
