@@ -109,6 +109,9 @@ class HiloCog(commands.Cog):
                     interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
+        # 全体JP積立&当選判定(横串)
+        from core import global_jackpot as _gjp
+        await _gjp.hook_pve_bet(self.bot, user.id, bet)
         session = HiloSession(bet)
         view = HiloView(self, session, user.id)
         await common.respond_with(
@@ -226,6 +229,11 @@ class HiloCog(commands.Cog):
         e.add_field(name="収支", value=("📈 +" if net >= 0 else "📉 ") + f"{net:,}")
         e.add_field(name="残高", value=common.money(self.bot.cfg, new_balance))
         e.add_field(name="連勝", value=f"🔥 {s.streak}", inline=False)
+        # 称号判定(連勝とベット)
+        from core import badges as _badges
+        if streak > 0:
+            await _badges.on_streak(self.bot, view.user_id, streak)
+        await _badges.on_bet(self.bot, view.user_id)
         again = common.PlayAgainView(self.bot, view.user_id, s.bet, self._start)
         await interaction.response.edit_message(embed=e, view=again)
         view.stop()

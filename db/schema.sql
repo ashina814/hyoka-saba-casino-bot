@@ -86,6 +86,40 @@ CREATE TABLE IF NOT EXISTS exchange_requests (
 CREATE INDEX IF NOT EXISTS idx_ex_status_user ON exchange_requests(status, user_id);
 CREATE INDEX IF NOT EXISTS idx_ex_created     ON exchange_requests(created_at);
 
+-- ───────────────────────── 大会 ─────────────────────────
+-- 1サーバー同時1大会想定。kind は 'profit'(収支) | 'streak'(連勝) | 'jackpot'(JP獲得額)
+CREATE TABLE IF NOT EXISTS tournaments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    prize_pool  INTEGER NOT NULL DEFAULT 0,
+    start_ts    INTEGER NOT NULL,
+    end_ts      INTEGER NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'running',   -- running | finished | cancelled
+    started_by  INTEGER NOT NULL,
+    winners     TEXT,                               -- JSON配列(終了時に書き込む)
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_tour_status ON tournaments(status);
+
+-- ───────────────────────── 全体JP(再分配プール) ─────────────────────────
+CREATE TABLE IF NOT EXISTS global_jackpot (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    amount        INTEGER NOT NULL DEFAULT 0,
+    last_winner   INTEGER,
+    last_won_at   TEXT,
+    last_amount   INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO global_jackpot (id, amount) VALUES (1, 0);
+
+-- ───────────────────────── 称号 ─────────────────────────
+CREATE TABLE IF NOT EXISTS badges (
+    user_id    INTEGER NOT NULL,
+    badge_id   TEXT NOT NULL,            -- 'first_jp', 'streak_100', 'mega_better' 等のコード
+    earned_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, badge_id)
+);
+
 -- ───────────────────────── おみくじ受取記録 ─────────────────────────
 -- ユーザー × 日付 で1日1回。決定論的に結果を選ぶので結果自体はテーブルに入れない。
 CREATE TABLE IF NOT EXISTS omikuji_claimed (
@@ -185,6 +219,15 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
     ('boost_until_ts',   '0',   'int',   'ブースト終了時刻(Unix秒、0で無効)'),
 
     -- お喋りログ(プレイヤー向け公開チャンネル)
-    ('casino_log_channel_id', '0', 'int', 'お喋りログ送信先チャンネル(0=未設定)');
+    ('casino_log_channel_id', '0', 'int', 'お喋りログ送信先チャンネル(0=未設定)'),
+
+    -- メンテモード(管理者以外の全機能を一時停止)
+    ('maintenance_mode', '0', 'bool', 'メンテモード(管理者以外をブロック)'),
+
+    -- 全体JP(インフレ中立の再分配プール)
+    ('global_jp_enabled', '1', 'bool', '全体JP機能 ON/OFF'),
+    ('global_jp_contrib', '0.005', 'float', 'PVEベットからプールへ積む割合(0.005=0.5%)'),
+    ('global_jp_full_speed', '5000000', 'int', 'この額に到達したら当選確率がほぼ100%/1ベットに'),
+    ('global_jp_seed', '0', 'int', '当選後の再シード額(通常0=完全リセット)');
 
 INSERT OR IGNORE INTO jackpot (name, amount) VALUES ('slot', 10000);

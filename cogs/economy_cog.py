@@ -51,6 +51,9 @@ class EconomyCog(commands.Cog):
             # 前者だけ通った場合に「もう受け取った扱いだが残高は据え置き」の
             # 不整合が起きていた。アトミック化で防ぐ。
             new_balance = await db.pay_daily(user.id, amount, new_streak, ts)
+        # 称号(ロック外で安全に)
+        from core import badges as _badges
+        await _badges.on_daily_streak(self.bot, user.id, new_streak)
         e = common.embed(
             "デイリー受け取り", f"🎁 {msg}", color=common.COLOR_WIN
         )

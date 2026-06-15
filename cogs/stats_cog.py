@@ -172,9 +172,11 @@ class StatsCog(commands.Cog):
         return e
 
     async def _embed_stats(self, user: discord.abc.User) -> discord.Embed:
+        from core.badges import badge_label
         db = self.bot.db
         cfg = self.bot.cfg
         s = await db.user_stats(user.id)
+        badges = await db.user_badges(user.id)
         e = common.embed(
             f"👤 {user.display_name} のプロフィール — 統計",
             color=common.COLOR_INFO,
@@ -201,6 +203,12 @@ class StatsCog(commands.Cog):
             value="\n".join(lines) or "(まだプレイ履歴がありません)",
             inline=False,
         )
+        if badges:
+            e.add_field(
+                name=f"🏅 称号 ({len(badges)})",
+                value="\n".join(badge_label(b) for b in badges),
+                inline=False,
+            )
         e.set_thumbnail(url=user.display_avatar.url)
         return e
 

@@ -32,6 +32,7 @@ BASE_COGS = [
     "cogs.stats_cog",
     "cogs.challenges",
     "cogs.omikuji",
+    "cogs.tournament",
     "cogs.admin",
 ]
 

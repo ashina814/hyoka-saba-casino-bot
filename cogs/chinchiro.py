@@ -60,6 +60,9 @@ class ChinchiroCog(commands.Cog):
                     interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
+        # 全体JP積立&当選判定(横串)
+        from core import global_jackpot as _gjp
+        await _gjp.hook_pve_bet(self.bot, user.id, bet)
 
         parent_throws = _throw_until_role()
         child_throws = _throw_until_role()
@@ -159,6 +162,11 @@ class ChinchiroCog(commands.Cog):
         e.add_field(name="残高", value=common.money(cfg, new_balance))
         if streak >= 2 and cmp > 0:
             e.set_footer(text=f"🔥 {streak}連勝中！")
+        # 称号判定
+        from core import badges as _badges
+        if streak > 0:
+            await _badges.on_streak(self.bot, user.id, streak)
+        await _badges.on_bet(self.bot, user.id)
         view = common.PlayAgainView(self.bot, user.id, bet, self._run)
         try:
             await msg.edit(embed=e, view=view)

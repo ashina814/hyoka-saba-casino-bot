@@ -32,6 +32,10 @@ class _RouteButton(discord.ui.Button):
         self._method = method
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        # ゲーム/両替/チャレンジ等のボタンは全てここを通る。
+        # メンテモードはここで一括ブロック(管理機能は別経路なのでOK)。
+        if await common.maintenance_guard(interaction):
+            return
         bot = interaction.client
         cog = bot.get_cog(self._cog_name)
         if cog is None:
@@ -125,9 +129,13 @@ class HubView(discord.ui.View):
             "おみくじ", "🎴", 3, discord.ButtonStyle.secondary,
             "hub:omikuji", "OmikujiCog",
         ))
+        self.add_item(_RouteButton(
+            "大会", "🏆", 3, discord.ButtonStyle.danger,
+            "hub:tournament", "TournamentCog",
+        ))
 
 
-def hub_embed(bot) -> discord.Embed:
+async def hub_embed(bot) -> discord.Embed:
     cfg = bot.cfg
     e = common.embed(
         "🎰 カジノへようこそ",
@@ -145,6 +153,32 @@ def hub_embed(bot) -> discord.Embed:
             value=f"残り **{h}時間{m}分**。PVE 全ゲームで配当アップ中！",
             inline=False,
         )
+    # 全体JP溜まり額
+    try:
+        gjp = await bot.db.global_jp_amount()
+        if gjp > 0 and bot.db.setting("global_jp_enabled", True):
+            e.add_field(
+                name="🌟 全体ジャックポット",
+                value=f"いま **{gjp:,}** 積み上がってます！全PVEから抽選！",
+                inline=False,
+            )
+    except Exception:  # noqa: BLE001
+        pass
+    # 大会開催中
+    try:
+        t = await bot.db.current_tournament()
+        if t:
+            import time as _t
+            remain = max(0, int(t["end_ts"]) - int(_t.time()))
+            h, m = remain // 3600, (remain % 3600) // 60
+            e.add_field(
+                name=f"🏆 大会開催中: {t['name']}",
+                value=f"賞金プール **{int(t['prize_pool']):,}** / "
+                      f"残り **{h}時間{m}分**\n参加するだけで自動エントリー!",
+                inline=False,
+            )
+    except Exception:  # noqa: BLE001
+        pass
     # 有効ゲームだけ説明を並べる
     for key, label, emoji, _cog, _row, _style, desc in GAME_BUTTONS:
         if not cfg.is_game_enabled(key):
@@ -169,8 +203,10 @@ class HubCog(commands.Cog):
 
     @app_commands.command(name="カジノ", description="カジノのメインパネルを表示")
     async def casino(self, interaction: discord.Interaction) -> None:
+        if await common.maintenance_guard(interaction):
+            return
         await interaction.response.send_message(
-            embed=hub_embed(self.bot), view=HubView(self.bot)
+            embed=await hub_embed(self.bot), view=HubView(self.bot)
         )
 
 

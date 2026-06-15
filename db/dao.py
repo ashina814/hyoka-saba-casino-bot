@@ -431,6 +431,92 @@ class Database:
         )
         return list(await cur.fetchall())
 
+    # ───────────────────────── 大会 ─────────────────────────
+    async def start_tournament(
+        self, name: str, kind: str, prize_pool: int,
+        start_ts: int, end_ts: int, started_by: int
+    ) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO tournaments (name, kind, prize_pool, start_ts, end_ts, started_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (name, kind, prize_pool, start_ts, end_ts, started_by),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid)  # type: ignore[arg-type]
+
+    async def current_tournament(self) -> Any:
+        cur = await self.conn.execute(
+            "SELECT * FROM tournaments WHERE status='running' ORDER BY id DESC LIMIT 1"
+        )
+        return await cur.fetchone()
+
+    async def finish_tournament(self, tour_id: int, winners_json: str) -> None:
+        await self.conn.execute(
+            "UPDATE tournaments SET status='finished', winners=? WHERE id=?",
+            (winners_json, tour_id),
+        )
+        await self.conn.commit()
+
+    async def cancel_tournament(self, tour_id: int) -> None:
+        await self.conn.execute(
+            "UPDATE tournaments SET status='cancelled' WHERE id=?",
+            (tour_id,),
+        )
+        await self.conn.commit()
+
+    # ───────────────────────── 全体JP ─────────────────────────
+    async def global_jp_amount(self) -> int:
+        cur = await self.conn.execute("SELECT amount FROM global_jackpot WHERE id=1")
+        row = await cur.fetchone()
+        return int(row["amount"]) if row else 0
+
+    async def global_jp_add(self, delta: int) -> int:
+        await self.conn.execute(
+            "UPDATE global_jackpot SET amount = amount + ? WHERE id=1",
+            (max(0, delta),),
+        )
+        await self.conn.commit()
+        return await self.global_jp_amount()
+
+    async def global_jp_win(self, winner_id: int) -> int:
+        """当選処理。獲得額(現プール)を返し、プールをseed額にリセット。"""
+        amount = await self.global_jp_amount()
+        seed = int(self.setting("global_jp_seed", 0) or 0)
+        await self.conn.execute(
+            "UPDATE global_jackpot SET amount=?, last_winner=?, last_amount=?, "
+            "last_won_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1",
+            (seed, winner_id, amount),
+        )
+        await self.conn.commit()
+        return amount
+
+    # ───────────────────────── 称号 ─────────────────────────
+    async def award_badge(self, user_id: int, badge_id: str) -> bool:
+        """称号を付与。既に持っていれば False を返す(再付与なし)。"""
+        try:
+            await self.conn.execute(
+                "INSERT INTO badges (user_id, badge_id) VALUES (?, ?)",
+                (user_id, badge_id),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    async def has_badge(self, user_id: int, badge_id: str) -> bool:
+        cur = await self.conn.execute(
+            "SELECT 1 FROM badges WHERE user_id=? AND badge_id=?",
+            (user_id, badge_id),
+        )
+        return (await cur.fetchone()) is not None
+
+    async def user_badges(self, user_id: int) -> list[str]:
+        cur = await self.conn.execute(
+            "SELECT badge_id FROM badges WHERE user_id=? ORDER BY earned_at",
+            (user_id,),
+        )
+        return [r["badge_id"] for r in await cur.fetchall()]
+
     # ───────────────────────── 統計(管理パネル用) ─────────────────────────
     async def economy_stats(self) -> dict[str, Any]:
         c = self.conn

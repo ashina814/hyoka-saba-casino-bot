@@ -84,6 +84,8 @@ TX_REASON_LABEL = {
     "bug_compensation_daily": "バグ補填(daily)",
     "challenge_reward": "チャレンジ報酬",
     "omikuji_bonus": "おみくじボーナス",
+    "global_jp_win": "🌟 全体JP獲得",
+    "tournament_prize": "🏆 大会賞金",
 }
 
 
@@ -141,6 +143,29 @@ def boost_remaining_sec(bot) -> int:
     import time as _t
     until = int(bot.db.setting("boost_until_ts", 0) or 0)
     return max(0, until - int(_t.time()))
+
+
+async def maintenance_guard(interaction: discord.Interaction) -> bool:
+    """メンテモード中で管理者以外なら、エラーメッセージを送って True を返す。
+
+    各ゲームの entry の最初に `if await common.maintenance_guard(interaction): return`
+    で挿す。管理者(`ADMIN_IDS`)はメンテ中でも自由に触れる。
+    """
+    bot = interaction.client
+    if not bot.db.setting("maintenance_mode", False):
+        return False
+    if is_admin(bot, interaction.user):
+        return False
+    e = embed(
+        "🛠️ メンテナンス中",
+        "現在カジノは一時停止しています。再開までしばらくお待ちください。",
+        color=COLOR_INFO,
+    )
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=e, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=e, ephemeral=True)
+    return True
 
 
 async def respond_with(

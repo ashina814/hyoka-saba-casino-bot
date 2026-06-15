@@ -75,6 +75,10 @@ class OmikujiCog(commands.Cog):
                 (user.id, _today(), label, bonus),
             )
             await db.conn.commit()
+            # 大吉なら称号
+            if label == "大吉":
+                from core import badges as _badges
+                await _badges.on_omikuji_oo(self.bot, user.id)
             e = self._embed(label, bonus, msg, just_drawn=True)
             await interaction.response.send_message(embed=e, ephemeral=True)
         else:

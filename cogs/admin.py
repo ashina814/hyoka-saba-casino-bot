@@ -426,6 +426,61 @@ class AdminDashboard(discord.ui.View):
             f"✅ お喋りログを <#{ch.id}> に設定しました。", ephemeral=True
         )
 
+    @discord.ui.button(label="🏆 大会を開催", row=2,
+                       style=discord.ButtonStyle.success)
+    async def tournament_start(self, interaction: discord.Interaction,
+                               _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        cog = self.cog.bot.get_cog("TournamentCog")
+        if cog is None:
+            await interaction.response.send_message(
+                "⚠️ 大会機能が無効です。", ephemeral=True
+            )
+            return
+        from cogs.tournament import TournamentStartChoiceView
+        await interaction.response.send_message(
+            "🏆 開催する大会の種類を選んでください。",
+            view=TournamentStartChoiceView(cog),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="🛠️ メンテモード切替", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def toggle_maint(self, interaction: discord.Interaction,
+                           _: discord.ui.Button):
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
+            return
+        db = self.cog.bot.db
+        cur = bool(db.setting("maintenance_mode", False))
+        new = "0" if cur else "1"
+        await db.set_setting("maintenance_mode", new)
+        await db.log_admin(
+            interaction.user.id, "maintenance",
+            None, f"{'ON' if not cur else 'OFF'}",
+        )
+        label = "🛠️ メンテモード ON(一般プレイ停止)" if not cur \
+            else "✅ メンテモード OFF(通常運用に復帰)"
+        await self.cog._post_audit_log(interaction, label)
+        # お喋りログにも告知
+        if not cur:
+            e = common.embed(
+                "🛠️ メンテナンスのお知らせ",
+                "ただいまカジノを一時停止しています。完了までしばらくお待ちください。",
+                color=common.COLOR_INFO,
+            )
+            await common.post_casino_log(self.cog.bot, embed=e)
+        else:
+            e = common.embed(
+                "✅ メンテナンス完了",
+                "通常運用を再開しました！ぜひお楽しみください。",
+                color=common.COLOR_WIN,
+            )
+            await common.post_casino_log(self.cog.bot, embed=e)
+        await interaction.response.send_message(label, ephemeral=True)
+
     @discord.ui.button(label="Cogリロード", emoji="🔄", row=4,
                        style=discord.ButtonStyle.secondary)
     async def reload(self, interaction: discord.Interaction, _: discord.ui.Button):

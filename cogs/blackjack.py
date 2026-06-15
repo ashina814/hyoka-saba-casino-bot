@@ -206,6 +206,9 @@ class BlackjackCog(commands.Cog):
                     interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
+        # 全体JP積立&当選判定(横串)
+        from core import global_jackpot as _gjp
+        await _gjp.hook_pve_bet(self.bot, user.id, bet)
 
         s = BJSession(bet)
         self.sessions[user.id] = s
@@ -452,6 +455,12 @@ class BlackjackCog(commands.Cog):
 
         # 後始末: セッション削除
         self.sessions.pop(user_id, None)
+
+        # 称号判定
+        from core import badges as _badges
+        if had_natural:
+            await _badges.on_bj_natural(self.bot, user_id)
+        await _badges.on_bet(self.bot, user_id)
 
         # ナチュラルBJ達成をお喋りログに通知
         if had_natural:

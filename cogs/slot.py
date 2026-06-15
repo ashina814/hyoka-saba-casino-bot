@@ -103,6 +103,9 @@ class SlotCog(commands.Cog):
             contrib = economy.jackpot_contribution(db, bet)
             if contrib:
                 await db.jackpot_add(contrib)
+        # 全体JP: スロット以外の場所でもフックされる横串。当選時は即配布。
+        from core import global_jackpot as _gjp
+        await _gjp.hook_pve_bet(self.bot, user.id, bet)
 
         # 抽選(結果は先に確定。演出だけ後で順次表示)
         reels = [_spin_reel() for _ in range(3)]
@@ -210,6 +213,13 @@ class SlotCog(commands.Cog):
             e.set_footer(text=f"💎 現在のジャックポット: {jp:,}")
         # JP当選やストリーク達成をお喋りログ&DM通知
         await self._announce(user, bet, total_credit, jackpot_won, streak)
+        # 称号判定
+        from core import badges as _badges
+        if jackpot_won:
+            await _badges.on_jackpot_won(self.bot, user.id)
+        if streak > 0:
+            await _badges.on_streak(self.bot, user.id, streak)
+        await _badges.on_bet(self.bot, user.id)
 
         view = common.PlayAgainView(self.bot, user.id, bet, self._run)
         try:
