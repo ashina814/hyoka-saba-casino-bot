@@ -48,6 +48,13 @@ class Config:
     currency_emoji: str
     enabled_games: frozenset[str]    # 空集合の代わりに ALL_GAMES が反映済み
 
+    # 両替の外部通貨API連携(別Botの第一次通貨と繋ぐ場合の設定)
+    # driver 名で実装を切替: none(既定/手動承認のみ) / zeny / coinX ...
+    exchange_auto_driver: str = "none"
+    exchange_auto_api_url: str = ""
+    exchange_auto_api_key: str = ""
+    exchange_auto_timeout_sec: float = 10.0
+
     @property
     def currency(self) -> str:
         """表示用: '🪙 チップ' のような結合済み文字列。"""
@@ -76,6 +83,11 @@ def load_config() -> Config:
     else:
         enabled = frozenset(ALL_GAMES)
 
+    try:
+        timeout_sec = float(os.getenv("EXCHANGE_AUTO_TIMEOUT_SEC", "10").strip() or "10")
+    except ValueError:
+        timeout_sec = 10.0
+
     return Config(
         token=token,
         dev_guild_id=dev_guild_id,
@@ -84,4 +96,10 @@ def load_config() -> Config:
         currency_name=os.getenv("CURRENCY_NAME", "チップ").strip() or "チップ",
         currency_emoji=os.getenv("CURRENCY_EMOJI", "🪙").strip(),
         enabled_games=enabled,
+        exchange_auto_driver=(
+            os.getenv("EXCHANGE_AUTO_DRIVER", "none").strip().lower() or "none"
+        ),
+        exchange_auto_api_url=os.getenv("EXCHANGE_AUTO_API_URL", "").strip(),
+        exchange_auto_api_key=os.getenv("EXCHANGE_AUTO_API_KEY", "").strip(),
+        exchange_auto_timeout_sec=timeout_sec,
     )

@@ -310,6 +310,16 @@ class ExchangeCog(commands.Cog):
             user.id, direction, send_amount, receive, fee
         )
 
+        # ── 自動モード: 外部通貨ドライバが auto=True なら API で即完結 ──
+        driver = getattr(self.bot, "currency_driver", None)
+        if driver is not None and getattr(driver, "auto", False):
+            handled = await self._try_auto(
+                interaction, driver, req_id, direction, send_amount, receive, owner_id
+            )
+            if handled:
+                return
+            # 失敗時はそのまま手動承認フローへフォールバック(申請レコードはそのまま)
+
         # 承認チャンネルへ送信
         ch = self.bot.get_channel(log_channel_id)
         if ch is None:
@@ -357,6 +367,64 @@ class ExchangeCog(commands.Cog):
             ),
             ephemeral=True,
         )
+
+    async def _try_auto(
+        self, interaction: discord.Interaction, driver,
+        req_id: int, direction: str, send_amount: int, receive: int,
+        owner_id: int,
+    ) -> bool:
+        """外部通貨ドライバで自動完結を試す。完結したら True を返す。
+
+        - DIR_Z2C: 外部通貨を burn(ユーザー→お釈迦さま)。成功でカジノコイン発行。
+        - DIR_C2Z: 既に内部エスクロー済みなので、外部通貨を mint(ユーザーへ送付)。
+        失敗時は False を返し、呼び出し側は手動承認フローへフォールバックする。
+        """
+        ref = f"req#{req_id}"
+        db = self.bot.db
+        try:
+            if direction == DIR_Z2C:
+                result = await driver.burn(interaction.user.id, send_amount, ref)
+            else:
+                result = await driver.mint(interaction.user.id, receive, ref)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("外部通貨ドライバ呼び出しで例外 req=%s: %s", req_id, exc)
+            return False
+
+        if result.manual or not result.ok:
+            # NoneDriver か API失敗。手動承認に回す。
+            return False
+
+        # 自動成功: 申請を approved にし、Bot側の対応する内部処理を実施
+        if direction == DIR_Z2C:
+            async with db.user_lock(interaction.user.id):
+                await db.adjust_balance(
+                    interaction.user.id, receive, "exchange_in", ref=str(req_id)
+                )
+        # DIR_C2Z は既にエスクロー差引済み(=焼却扱い)。追加処理なし。
+
+        await db.set_exchange_status(req_id, "approved", 0)  # approver_id=0 = system
+        await db.log_admin(
+            0, "exchange_auto", interaction.user.id,
+            f"req={req_id} dir={direction} ref={result.external_ref or '-'}"
+        )
+
+        # ephemeral でユーザーに即時通知
+        cfg = self.bot.cfg
+        if direction == DIR_Z2C:
+            body = (
+                f"🤖 自動承認: **{send_amount:,} ゼニー → {receive:,} カジノコイン** 発行完了。"
+            )
+        else:
+            body = (
+                f"🤖 自動承認: **{send_amount:,} カジノコイン → {receive:,} ゼニー** 送付完了。"
+            )
+        await interaction.response.send_message(
+            embed=common.embed(
+                "💱 両替が自動完了しました", body, color=common.COLOR_WIN
+            ),
+            ephemeral=True,
+        )
+        return True
 
     async def _rollback_creation(
         self, user_id: int, direction: str, send_amount: int, req_id: int

@@ -13,6 +13,7 @@ import discord
 from discord.ext import commands
 
 from config import Config, load_config
+from core.external_currency import make_driver
 from db.dao import Database
 
 logging.basicConfig(
@@ -52,6 +53,10 @@ class CasinoBot(commands.Bot):
         super().__init__(command_prefix="!casino-unused!", intents=intents)
         self.cfg = cfg
         self.db = Database(cfg.db_path)
+        # 外部通貨ドライバ。未設定なら NoneDriver で全機能が現状の手動承認のまま動く。
+        self.currency_driver = make_driver(cfg)
+        log.info("外部通貨ドライバ: %s (auto=%s)",
+                 self.currency_driver.name, self.currency_driver.auto)
 
     async def setup_hook(self) -> None:
         await self.db.connect()
@@ -78,6 +83,10 @@ class CasinoBot(commands.Bot):
         )
 
     async def close(self) -> None:
+        try:
+            await self.currency_driver.close()
+        except Exception:  # noqa: BLE001
+            log.exception("currency_driver.close で例外")
         await self.db.close()
         await super().close()
 
