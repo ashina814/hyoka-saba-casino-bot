@@ -1,12 +1,16 @@
-"""ハブパネル: `/カジノ` で全ゲームの入口ボタンを並べたパネルを設置する。
+"""ハブパネル: `/カジノ` で主要動線をまとめたメインパネル + 「✨もっと」サブパネル。
 
 設計:
-- View は永続(timeout=None + 固定 custom_id)。Bot 再起動後も
-  on_ready の add_view(HubView(bot)) で押下を再ルーティングする。
-- ボタンは `.env` の ENABLED_GAMES に合わせて **動的に組み立て** る。
-  サーバーAでは「スロット/チンチロ/ハイロー/BJ のみ」、
-  サーバーBでは「全部入り」のように、同じコードで構成だけ変えられる。
-- ゲームの追加は GAME_BUTTONS と各Cogの entry() を足すだけで完結する。
+- メインViewは永続(timeout=None + 固定 custom_id)。/カジノで設置されたパネルが
+  再起動後も生き続けるよう、on_ready で add_view(HubView(bot)) 再登録する。
+- メインには「頻繁に使うもの」だけ並べる:
+    ゲーム(PVE/PVP、ENABLED_GAMES で動的フィルタ)
+    + 経済(デイリー/ランキング/ルール)
+    + 「✨もっと」サブパネル入口
+- 「✨もっと」はメインを永続のまま、ephemeral で MoreView を出す:
+    両替/チャレンジ/おみくじ/大会/殿堂
+  ephemeral なので timeout で自然消去、戻るボタン不要。
+- 残高表示はハブから外し、/プロフィール(残高/履歴/統計/称号/制限のタブ式)に統一。
 """
 from __future__ import annotations
 
@@ -47,16 +51,19 @@ class _RouteButton(discord.ui.Button):
 
 
 class _EconomyButton(discord.ui.Button):
-    """残高 / デイリー / ランキングを送る、EconomyCog 専用ショートカット。"""
+    """デイリー / ランキングを送る、EconomyCog 専用ショートカット。"""
 
-    def __init__(self, label: str, emoji: str, custom_id: str, action: str) -> None:
+    def __init__(self, label: str, emoji: str, custom_id: str, action: str,
+                 row: int = 2) -> None:
         super().__init__(
-            label=label, emoji=emoji, row=2,
+            label=label, emoji=emoji, row=row,
             style=discord.ButtonStyle.secondary, custom_id=custom_id,
         )
         self._action = action
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if await common.maintenance_guard(interaction):
+            return
         cog = interaction.client.get_cog("EconomyCog")
         if cog is None:
             await interaction.response.send_message(
@@ -65,16 +72,36 @@ class _EconomyButton(discord.ui.Button):
             return
         if self._action == "daily":
             e = await cog.claim_daily(interaction.user)
-        elif self._action == "balance":
-            e = await cog.build_balance_embed(interaction.user)
         else:  # rank
             e = await cog.build_leaderboard_embed()
         await interaction.response.send_message(embed=e, ephemeral=True)
 
 
+class _MoreButton(discord.ui.Button):
+    """『✨もっと』ボタン。押すと ephemeral で MoreView を開く。"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            label="もっと", emoji="✨", row=2,
+            style=discord.ButtonStyle.primary, custom_id="hub:more",
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if await common.maintenance_guard(interaction):
+            return
+        await interaction.response.send_message(
+            embed=common.embed(
+                "✨ もっと",
+                "両替 / チャレンジ / おみくじ / 大会 / 殿堂 から選んでください。",
+                color=common.COLOR_INFO,
+            ),
+            view=MoreView(),
+            ephemeral=True,
+        )
+
+
 # ───────────────────────── ゲーム定義 ─────────────────────────
 # (game_key, label, emoji, cog_class_name, row, style, short_desc)
-# row=0: PVE / row=1: PVP / row=2: 経済(固定) / row=3: 両替(固定)
 GAME_BUTTONS: list[tuple[str, str, str, str, int, discord.ButtonStyle, str]] = [
     ("slot",      "スロット",       "🎰", "SlotCog",      0, discord.ButtonStyle.success,
      "3リールを揃えて配当。JP搭載"),
@@ -93,13 +120,13 @@ GAME_BUTTONS: list[tuple[str, str, str, str, int, discord.ButtonStyle, str]] = [
 ]
 
 
-# ───────────────────────── ハブ View (動的) ─────────────────────────
+# ───────────────────────── ハブ View (動的、永続) ─────────────────────────
 class HubView(discord.ui.View):
     def __init__(self, bot) -> None:
         super().__init__(timeout=None)
         cfg = bot.cfg
 
-        # ゲームボタン: enabled_games に含まれるものだけ追加
+        # row 0 / row 1: ゲームボタン(有効なものだけ)
         for key, label, emoji, cog_name, row, style, _desc in GAME_BUTTONS:
             if not cfg.is_game_enabled(key):
                 continue
@@ -107,47 +134,60 @@ class HubView(discord.ui.View):
                 label, emoji, row, style, f"hub:{key}", cog_name
             ))
 
-        # 経済(常設)
-        self.add_item(_EconomyButton("デイリー",   "🎁", "hub:daily",   "daily"))
-        self.add_item(_EconomyButton("残高",       "💰", "hub:balance", "balance"))
-        self.add_item(_EconomyButton("ランキング", "📊", "hub:rank",    "rank"))
-        # ルール(常設、row=2 の残り1枠に並べる)
+        # row 2: よく使う動線4つに圧縮
+        self.add_item(_EconomyButton("デイリー", "🎁", "hub:daily", "daily"))
+        self.add_item(_EconomyButton("ランキング", "📊", "hub:rank", "rank"))
         self.add_item(_RouteButton(
             "ルール", "❓", 2, discord.ButtonStyle.secondary,
             "hub:rules", "HelpCog",
         ))
-        # 両替・チャレンジ・統計系(row=3)
+        self.add_item(_MoreButton())
+
+
+# ───────────────────────── 「✨ もっと」サブパネル(ephemeral) ─────────────────────────
+class MoreView(discord.ui.View):
+    """両替/チャレンジ/おみくじ/大会/殿堂 を集約した ephemeral サブパネル。
+
+    timeout で自然消去するので、永続化や custom_id ベース再登録は不要。
+    各ボタンは _RouteButton(custom_id付き)を使うが、ephemeral 上なので
+    timeout後は反応しない(=ハブから開き直してもらう)。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(timeout=180)
         self.add_item(_RouteButton(
-            "両替", "💱", 3, discord.ButtonStyle.success,
-            "hub:exchange", "ExchangeCog",
+            "両替", "💱", 0, discord.ButtonStyle.success,
+            "more:exchange", "ExchangeCog",
         ))
         self.add_item(_RouteButton(
-            "チャレンジ", "🗓️", 3, discord.ButtonStyle.primary,
-            "hub:challenges", "ChallengesCog",
+            "チャレンジ", "🗓️", 0, discord.ButtonStyle.primary,
+            "more:challenges", "ChallengesCog",
         ))
         self.add_item(_RouteButton(
-            "おみくじ", "🎴", 3, discord.ButtonStyle.secondary,
-            "hub:omikuji", "OmikujiCog",
+            "おみくじ", "🎴", 0, discord.ButtonStyle.secondary,
+            "more:omikuji", "OmikujiCog",
         ))
         self.add_item(_RouteButton(
-            "大会", "🏆", 3, discord.ButtonStyle.danger,
-            "hub:tournament", "TournamentCog",
+            "大会", "🏆", 1, discord.ButtonStyle.danger,
+            "more:tournament", "TournamentCog",
         ))
         self.add_item(_RouteButton(
-            "殿堂", "🏛️", 3, discord.ButtonStyle.secondary,
-            "hub:hall", "HallCog",
+            "殿堂", "🏛️", 1, discord.ButtonStyle.secondary,
+            "more:hall", "HallCog",
         ))
 
 
+# ───────────────────────── Embed ─────────────────────────
 async def hub_embed(bot) -> discord.Embed:
     cfg = bot.cfg
     e = common.embed(
         "🎰 カジノへようこそ",
-        "下のボタンから遊べます。各ゲームの遊び方は **ルール** ボタンで確認できます。\n"
-        "初回は自動で初期チップが配られます。毎日 **デイリー** を忘れずに！",
+        "下のボタンから遊べます。各ゲームの遊び方は **❓ルール** から。\n"
+        "残高/履歴/称号などは **/プロフィール** で確認できます。\n"
+        "**✨もっと** から両替・チャレンジ・おみくじ・大会・殿堂へ。",
         color=common.COLOR_MAIN,
     )
-    # ブースト中ならハブパネル冒頭に大きく告知
+    # ブースト中なら冒頭に告知
     boost = common.boost_multiplier(bot)
     if boost > 1.0:
         remain = common.boost_remaining_sec(bot)
@@ -183,14 +223,11 @@ async def hub_embed(bot) -> discord.Embed:
             )
     except Exception:  # noqa: BLE001
         pass
-    # 有効ゲームだけ説明を並べる
+    # 有効ゲームの短い説明
     for key, label, emoji, _cog, _row, _style, desc in GAME_BUTTONS:
         if not cfg.is_game_enabled(key):
             continue
         e.add_field(name=f"{emoji} {label}", value=desc, inline=True)
-    e.add_field(
-        name="💱 両替", value="ゼニー ↔ カジノコイン(申請承認制)", inline=False
-    )
     return e
 
 
