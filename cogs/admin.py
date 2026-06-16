@@ -269,13 +269,83 @@ class ConfigSelect(discord.ui.Select):
         )
 
 
-# ───────────────────────── メインダッシュボード ─────────────────────────
-class AdminDashboard(discord.ui.View):
+# ───────────────────────── 管理ダッシュボード(ページ式) ─────────────────────────
+class _AdminViewBase(discord.ui.View):
+    """全サブビュー共通: 管理者権限チェック + cog 参照保持。"""
+
     def __init__(self, cog: "AdminCog") -> None:
         super().__init__(timeout=300)
         self.cog = cog
 
-    # row 0: ユーザー操作
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message(
+                "🚫 管理者専用です。", ephemeral=True
+            )
+            return False
+        return True
+
+    async def _back_to_main(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            embed=self.cog.main_embed(), view=MainAdminView(self.cog),
+        )
+
+
+class MainAdminView(_AdminViewBase):
+    """カテゴリ選択。各ボタンを押すとサブビューに切替える。"""
+
+    @discord.ui.button(label="👤 ユーザー操作", row=0,
+                       style=discord.ButtonStyle.primary)
+    async def user_ops(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=self.cog.user_ops_embed(),
+            view=UserOpsSubView(self.cog),
+        )
+
+    @discord.ui.button(label="💰 経済", row=0,
+                       style=discord.ButtonStyle.primary)
+    async def economy(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=self.cog.economy_embed(),
+            view=EconomySubView(self.cog),
+        )
+
+    @discord.ui.button(label="💱 両替", row=0,
+                       style=discord.ButtonStyle.primary)
+    async def exchange(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=self.cog.exchange_embed(),
+            view=ExchangeSubView(self.cog),
+        )
+
+    @discord.ui.button(label="🛠️ システム", row=1,
+                       style=discord.ButtonStyle.secondary)
+    async def system(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=self.cog.system_embed(),
+            view=SystemSubView(self.cog),
+        )
+
+    @discord.ui.button(label="🚨 危険ゾーン", row=1,
+                       style=discord.ButtonStyle.danger)
+    async def danger(self, interaction: discord.Interaction, _: discord.ui.Button):
+        # env admin のみ
+        if not self.cog.bot.is_env_admin(interaction.user.id):
+            await interaction.response.send_message(
+                "🚫 危険ゾーンは `.env` の `ADMIN_IDS` に登録された"
+                "**初期管理者のみ** アクセスできます。",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.edit_message(
+            embed=self.cog.danger_embed(),
+            view=DangerSubView(self.cog),
+        )
+
+
+class UserOpsSubView(_AdminViewBase):
+    """残高操作・凍結・監査(残高セットだけは Danger ゾーンへ)。"""
+
     @discord.ui.button(label="残高 付与", emoji="➕", row=0,
                        style=discord.ButtonStyle.success)
     async def give(self, interaction: discord.Interaction, _: discord.ui.Button):
@@ -286,17 +356,11 @@ class AdminDashboard(discord.ui.View):
     async def take(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(BalanceOpModal(self.cog, "take"))
 
-    @discord.ui.button(label="残高 セット", emoji="🎯", row=0,
-                       style=discord.ButtonStyle.secondary)
-    async def setbal(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await interaction.response.send_modal(BalanceOpModal(self.cog, "set"))
-
     @discord.ui.button(label="直前の操作を取消", emoji="↩️", row=0,
                        style=discord.ButtonStyle.secondary)
     async def undo(self, interaction: discord.Interaction, _: discord.ui.Button):
         await self.cog.handle_undo(interaction)
 
-    # row 1: 凍結 / 監査
     @discord.ui.button(label="凍結", emoji="🧊", row=1,
                        style=discord.ButtonStyle.primary)
     async def freeze(self, interaction: discord.Interaction, _: discord.ui.Button):
@@ -312,82 +376,66 @@ class AdminDashboard(discord.ui.View):
     async def audit(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_modal(AuditModal(self.cog))
 
-    # row 2: 経済・設定
-    @discord.ui.button(label="経済ダッシュボード", emoji="📊", row=2,
+    @discord.ui.button(label="⬅️ 戻る", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._back_to_main(interaction)
+
+
+class EconomySubView(_AdminViewBase):
+    """経済ダッシュボード、設定変更、大会、ブースト、お喋りCH。"""
+
+    @discord.ui.button(label="経済ダッシュボード", emoji="📊", row=0,
                        style=discord.ButtonStyle.primary)
     async def stats(self, interaction: discord.Interaction, _: discord.ui.Button):
         view = EconomyDashboardView(self.cog)
         await interaction.response.send_message(
-            embed=await self.cog.eco_embed_overview(),
-            view=view,
-            ephemeral=True,
+            embed=await self.cog.eco_embed_overview(), view=view, ephemeral=True,
         )
 
-    @discord.ui.button(label="設定一覧", emoji="📋", row=2,
+    @discord.ui.button(label="設定一覧", emoji="📋", row=0,
                        style=discord.ButtonStyle.secondary)
     async def listcfg(self, interaction: discord.Interaction, _: discord.ui.Button):
         await interaction.response.send_message(
             embed=await self.cog.settings_embed(), ephemeral=True
         )
 
-    @discord.ui.button(label="設定を変更", emoji="🛠️", row=2,
+    @discord.ui.button(label="設定を変更", emoji="🛠️", row=0,
                        style=discord.ButtonStyle.success)
     async def editcfg(self, interaction: discord.Interaction, _: discord.ui.Button):
         rows = await self.cog.bot.db.settings_meta()
         view = discord.ui.View(timeout=120)
         view.add_item(ConfigSelect(self.cog, rows))
         await interaction.response.send_message(
-            "変更したい設定を選んでください。", view=view, ephemeral=True
+            "変更したい設定を選んでください。", view=view, ephemeral=True,
         )
 
-    # row 3: 両替まわり
-    @discord.ui.button(label="承認CHをここに設定", emoji="📥", row=3,
-                       style=discord.ButtonStyle.primary)
-    async def set_log_ch(self, interaction: discord.Interaction, _: discord.ui.Button):
-        ch = interaction.channel
-        if ch is None or not hasattr(ch, "id"):
+    @discord.ui.button(label="🏆 大会を開催", row=1,
+                       style=discord.ButtonStyle.success)
+    async def tournament_start(self, interaction: discord.Interaction,
+                               _: discord.ui.Button):
+        cog = self.cog.bot.get_cog("TournamentCog")
+        if cog is None:
             await interaction.response.send_message(
-                "⚠️ このチャンネルは設定先にできません。", ephemeral=True
+                "⚠️ 大会機能が無効です。", ephemeral=True,
             )
             return
-        await self.cog.bot.db.set_setting("exchange_log_channel_id", str(ch.id))
-        await self.cog.bot.db.log_admin(
-            interaction.user.id, "config", None, f"exchange_log_channel_id={ch.id}"
-        )
-        await self.cog._post_audit_log(
-            interaction, f"📥 両替承認CHを <#{ch.id}> に設定"
-        )
+        from cogs.tournament import TournamentStartChoiceView
         await interaction.response.send_message(
-            f"✅ 両替承認チャンネルを <#{ch.id}> に設定しました。", ephemeral=True
+            "🏆 開催する大会の種類を選んでください。",
+            view=TournamentStartChoiceView(cog), ephemeral=True,
         )
 
-    @discord.ui.button(label="お釈迦さま設定", emoji="🔥", row=3,
-                       style=discord.ButtonStyle.primary)
-    async def set_owner(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await interaction.response.send_modal(OwnerIdModal(self.cog))
-
-    @discord.ui.button(label="両替申請一覧", emoji="📋", row=3,
-                       style=discord.ButtonStyle.secondary)
-    async def list_pending(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await interaction.response.send_message(
-            embed=await self.cog.pending_exchange_embed(), ephemeral=True
-        )
-
-    # row 4: イベント & システム
-    @discord.ui.button(label="🚀 ブースト開始", row=4,
+    @discord.ui.button(label="🚀 ブースト開始", row=1,
                        style=discord.ButtonStyle.success)
-    async def boost_start(self, interaction: discord.Interaction, _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
+    async def boost_start(self, interaction: discord.Interaction,
+                          _: discord.ui.Button):
         await interaction.response.send_modal(BoostStartModal(self.cog))
 
-    @discord.ui.button(label="🛑 ブースト終了", row=4,
+    @discord.ui.button(label="🛑 ブースト終了", row=1,
                        style=discord.ButtonStyle.danger)
-    async def boost_end(self, interaction: discord.Interaction, _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
+    async def boost_end(self, interaction: discord.Interaction,
+                        _: discord.ui.Button):
         was_active = common.boost_remaining_sec(self.cog.bot) > 0
         await self.cog.bot.db.set_setting("boost_until_ts", "0")
         await self.cog.bot.db.set_setting("boost_multiplier", "1.0")
@@ -406,12 +454,10 @@ class AdminDashboard(discord.ui.View):
             "✅ ブーストを停止しました。", ephemeral=True
         )
 
-    @discord.ui.button(label="お喋りCH をここに", emoji="📢", row=4,
+    @discord.ui.button(label="お喋りCH をここに", emoji="📢", row=2,
                        style=discord.ButtonStyle.primary)
-    async def set_chat_ch(self, interaction: discord.Interaction, _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
+    async def set_chat_ch(self, interaction: discord.Interaction,
+                          _: discord.ui.Button):
         ch = interaction.channel
         if ch is None or not hasattr(ch, "id"):
             await interaction.response.send_message(
@@ -420,100 +466,151 @@ class AdminDashboard(discord.ui.View):
             return
         await self.cog.bot.db.set_setting("casino_log_channel_id", str(ch.id))
         await self.cog.bot.db.log_admin(
-            interaction.user.id, "config", None, f"casino_log_channel_id={ch.id}"
+            interaction.user.id, "config", None, f"casino_log_channel_id={ch.id}",
         )
         await interaction.response.send_message(
             f"✅ お喋りログを <#{ch.id}> に設定しました。", ephemeral=True
         )
 
-    @discord.ui.button(label="🏆 大会を開催", row=2,
-                       style=discord.ButtonStyle.success)
-    async def tournament_start(self, interaction: discord.Interaction,
-                               _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
-        cog = self.cog.bot.get_cog("TournamentCog")
-        if cog is None:
+    @discord.ui.button(label="⬅️ 戻る", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._back_to_main(interaction)
+
+
+class ExchangeSubView(_AdminViewBase):
+    """両替まわりの設定とリスト表示。"""
+
+    @discord.ui.button(label="承認CHをここに設定", emoji="📥", row=0,
+                       style=discord.ButtonStyle.primary)
+    async def set_log_ch(self, interaction: discord.Interaction,
+                         _: discord.ui.Button):
+        ch = interaction.channel
+        if ch is None or not hasattr(ch, "id"):
             await interaction.response.send_message(
-                "⚠️ 大会機能が無効です。", ephemeral=True
+                "⚠️ このチャンネルは設定先にできません。", ephemeral=True
             )
             return
-        from cogs.tournament import TournamentStartChoiceView
+        await self.cog.bot.db.set_setting("exchange_log_channel_id", str(ch.id))
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "config", None, f"exchange_log_channel_id={ch.id}",
+        )
+        await self.cog._post_audit_log(
+            interaction, f"📥 両替承認CHを <#{ch.id}> に設定"
+        )
         await interaction.response.send_message(
-            "🏆 開催する大会の種類を選んでください。",
-            view=TournamentStartChoiceView(cog),
-            ephemeral=True,
+            f"✅ 両替承認チャンネルを <#{ch.id}> に設定しました。", ephemeral=True
         )
 
-    @discord.ui.button(label="👥 管理者一覧", row=4,
-                       style=discord.ButtonStyle.secondary)
-    async def list_admins(self, interaction: discord.Interaction,
-                          _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            embed=await self.cog.admins_embed(), ephemeral=True
-        )
-
-    @discord.ui.button(label="➕ 管理者追加", row=4,
-                       style=discord.ButtonStyle.success)
-    async def add_admin(self, interaction: discord.Interaction,
+    @discord.ui.button(label="お釈迦さま設定", emoji="🔥", row=0,
+                       style=discord.ButtonStyle.primary)
+    async def set_owner(self, interaction: discord.Interaction,
                         _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
-        await interaction.response.send_modal(AddAdminModal(self.cog))
+        await interaction.response.send_modal(OwnerIdModal(self.cog))
 
-    @discord.ui.button(label="➖ 管理者削除", row=4,
-                       style=discord.ButtonStyle.danger)
-    async def remove_admin(self, interaction: discord.Interaction,
+    @discord.ui.button(label="両替申請一覧", emoji="📋", row=0,
+                       style=discord.ButtonStyle.secondary)
+    async def list_pending(self, interaction: discord.Interaction,
                            _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
-        await interaction.response.send_modal(RemoveAdminModal(self.cog))
+        await interaction.response.send_message(
+            embed=await self.cog.pending_exchange_embed(), ephemeral=True
+        )
 
-    @discord.ui.button(label="🛠️ メンテモード切替", row=4,
+    @discord.ui.button(label="⬅️ 戻る", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._back_to_main(interaction)
+
+
+class SystemSubView(_AdminViewBase):
+    """メンテモード、Cogリロード。"""
+
+    @discord.ui.button(label="🛠️ メンテモード切替", row=0,
                        style=discord.ButtonStyle.secondary)
     async def toggle_maint(self, interaction: discord.Interaction,
                            _: discord.ui.Button):
-        if not common.is_admin(self.cog.bot, interaction.user):
-            await interaction.response.send_message("🚫 管理者専用です。", ephemeral=True)
-            return
         db = self.cog.bot.db
         cur = bool(db.setting("maintenance_mode", False))
-        new = "0" if cur else "1"
-        await db.set_setting("maintenance_mode", new)
+        await db.set_setting("maintenance_mode", "0" if cur else "1")
         await db.log_admin(
-            interaction.user.id, "maintenance",
-            None, f"{'ON' if not cur else 'OFF'}",
+            interaction.user.id, "maintenance", None,
+            f"{'ON' if not cur else 'OFF'}",
         )
         label = "🛠️ メンテモード ON(一般プレイ停止)" if not cur \
             else "✅ メンテモード OFF(通常運用に復帰)"
         await self.cog._post_audit_log(interaction, label)
-        # お喋りログにも告知
         if not cur:
             e = common.embed(
                 "🛠️ メンテナンスのお知らせ",
-                "ただいまカジノを一時停止しています。完了までしばらくお待ちください。",
+                "ただいまカジノを一時停止しています。"
+                "完了までしばらくお待ちください。",
                 color=common.COLOR_INFO,
             )
-            await common.post_casino_log(self.cog.bot, embed=e)
         else:
             e = common.embed(
                 "✅ メンテナンス完了",
                 "通常運用を再開しました！ぜひお楽しみください。",
                 color=common.COLOR_WIN,
             )
-            await common.post_casino_log(self.cog.bot, embed=e)
+        await common.post_casino_log(self.cog.bot, embed=e)
         await interaction.response.send_message(label, ephemeral=True)
 
-    @discord.ui.button(label="Cogリロード", emoji="🔄", row=4,
+    @discord.ui.button(label="Cogリロード", emoji="🔄", row=0,
                        style=discord.ButtonStyle.secondary)
-    async def reload(self, interaction: discord.Interaction, _: discord.ui.Button):
+    async def reload(self, interaction: discord.Interaction,
+                     _: discord.ui.Button):
         await interaction.response.send_modal(ReloadModal(self.cog))
+
+    @discord.ui.button(label="⬅️ 戻る", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._back_to_main(interaction)
+
+
+class DangerSubView(_AdminViewBase):
+    """🚨 危険ゾーン: 管理者の追加/削除、残高直接セット。env管理者専用。"""
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
+        if not self.cog.bot.is_env_admin(interaction.user.id):
+            await interaction.response.send_message(
+                "🚫 危険ゾーンは `.env` の `ADMIN_IDS` に登録された"
+                "**初期管理者のみ** 操作できます。",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="残高 セット", emoji="🎯", row=0,
+                       style=discord.ButtonStyle.danger)
+    async def setbal(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_modal(BalanceOpModal(self.cog, "set"))
+
+    @discord.ui.button(label="👥 管理者一覧", row=1,
+                       style=discord.ButtonStyle.secondary)
+    async def list_admins(self, interaction: discord.Interaction,
+                          _: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=await self.cog.admins_embed(), ephemeral=True
+        )
+
+    @discord.ui.button(label="➕ 管理者追加", row=1,
+                       style=discord.ButtonStyle.success)
+    async def add_admin(self, interaction: discord.Interaction,
+                        _: discord.ui.Button):
+        await interaction.response.send_modal(AddAdminModal(self.cog))
+
+    @discord.ui.button(label="➖ 管理者削除", row=1,
+                       style=discord.ButtonStyle.danger)
+    async def remove_admin(self, interaction: discord.Interaction,
+                           _: discord.ui.Button):
+        await interaction.response.send_modal(RemoveAdminModal(self.cog))
+
+    @discord.ui.button(label="⬅️ 戻る", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await self._back_to_main(interaction)
 
 
 class BoostStartModal(discord.ui.Modal, title="🚀 ブースト開始"):
@@ -1236,28 +1333,128 @@ class AdminCog(commands.Cog):
             )
         return e
 
-    # ── ダッシュボード ──
-    def dashboard_embed(self) -> discord.Embed:
+    # ── ダッシュボード(ページ式) ──
+    def main_embed(self) -> discord.Embed:
+        """カテゴリ選択画面の説明。各サブビューに遷移可能。"""
         e = common.embed(
             "🛠️ 管理ダッシュボード",
-            "操作はボタン経由で行えます。残高変更・凍結は確認ステップ付き。\n"
-            "高額操作は理由必須、自分への付与は禁止、5秒の連打防止あり。",
+            "操作したいカテゴリを選んでください。\n"
+            "各操作は監査ログに残り、承認チャンネルへ自動投稿されます。",
+            color=common.COLOR_ADMIN,
+        )
+        e.add_field(name="👤 ユーザー操作",
+                    value="残高 付与/没収/取消、凍結/解凍、取引履歴監査",
+                    inline=False)
+        e.add_field(name="💰 経済",
+                    value="経済ダッシュボード、設定、大会、ブースト、お喋りCH設定",
+                    inline=False)
+        e.add_field(name="💱 両替",
+                    value="承認CH設定、お釈迦さま設定、申請一覧",
+                    inline=False)
+        e.add_field(name="🛠️ システム",
+                    value="メンテモード、Cogリロード",
+                    inline=False)
+        e.add_field(
+            name="🚨 危険ゾーン (env管理者のみ)",
+            value="残高セット(直接)、管理者の追加/削除",
+            inline=False,
+        )
+        e.set_footer(
+            text="安全装置: 確認ステップ / 高額理由必須 / 自己付与禁止 / 5秒CD / Undo",
+        )
+        return e
+
+    def user_ops_embed(self) -> discord.Embed:
+        e = common.embed(
+            "🛠️ 管理 → 👤 ユーザー操作",
+            "残高変更・凍結はすべて **確認ステップ** を挟みます。\n"
+            "高額(10万以上)は **理由必須**、5秒CD、自分への付与は不可。",
             color=common.COLOR_ADMIN,
         )
         e.add_field(
-            name="ユーザー操作", value="付与 / 没収 / セット / 取消 / 凍結 / 解凍 / 監査",
+            name="ボタン",
+            value=(
+                "**➕ 残高 付与** / **➖ 残高 没収**\n"
+                "**↩️ 直前の操作を取消** (あなたの最後の操作1件のみ)\n"
+                "**🧊 凍結** / **☀️ 解凍** (賭博・両替・送金が止まる)\n"
+                "**🔍 取引履歴 監査** (対象ユーザーID指定)"
+            ),
             inline=False,
         )
-        e.add_field(
-            name="経済・設定", value="統計 / 設定一覧 / 設定変更", inline=False,
+        return e
+
+    def economy_embed(self) -> discord.Embed:
+        e = common.embed(
+            "🛠️ 管理 → 💰 経済",
+            "経済の可視化・チューニング・イベント運営。",
+            color=common.COLOR_ADMIN,
         )
         e.add_field(
-            name="両替", value="承認CH設定 / お釈迦さま設定 / 申請一覧", inline=False,
+            name="ボタン",
+            value=(
+                "**📊 経済ダッシュボード** (Gini/インフレ/推移 3タブ)\n"
+                "**📋 設定一覧** / **🛠️ 設定を変更**\n"
+                "**🏆 大会を開催** (3種類から選択)\n"
+                "**🚀 ブースト開始** / **🛑 ブースト終了**\n"
+                "**📢 お喋りCH をここに** (押下したチャンネルを公告先に)"
+            ),
+            inline=False,
+        )
+        return e
+
+    def exchange_embed(self) -> discord.Embed:
+        e = common.embed(
+            "🛠️ 管理 → 💱 両替",
+            "ゼニー ↔ カジノコインの両替フロー設定。",
+            color=common.COLOR_ADMIN,
         )
         e.add_field(
-            name="システム", value="Cog リロード", inline=False,
+            name="ボタン",
+            value=(
+                "**📥 承認CHをここに設定** (運営専用CHで押す)\n"
+                "**🔥 お釈迦さま設定** (焼却受取アカウントのID)\n"
+                "**📋 両替申請一覧** (保留中)"
+            ),
+            inline=False,
         )
-        e.set_footer(text="操作は監査ログに残り、承認チャンネルへ自動投稿されます。")
+        return e
+
+    def system_embed(self) -> discord.Embed:
+        e = common.embed(
+            "🛠️ 管理 → 🛠️ システム",
+            "メンテと運用補助。",
+            color=common.COLOR_ADMIN,
+        )
+        e.add_field(
+            name="ボタン",
+            value=(
+                "**🛠️ メンテモード切替** (一般プレイ停止/再開を自動アナウンス)\n"
+                "**🔄 Cogリロード** (無停止で個別Cog差替)"
+            ),
+            inline=False,
+        )
+        return e
+
+    def danger_embed(self) -> discord.Embed:
+        e = common.embed(
+            "🛠️ 管理 → 🚨 危険ゾーン",
+            "ここの操作は **`.env` の `ADMIN_IDS` に登録された初期管理者のみ** "
+            "が実行できます。誤操作の影響が大きいため、確認ステップが必須です。",
+            color=common.COLOR_LOSE,
+        )
+        e.add_field(
+            name="ボタン",
+            value=(
+                "**🎯 残高 セット** (直接書き換え。差分は監査ログ)\n"
+                "**👥 管理者一覧** (env由来 / DB由来を区別表示)\n"
+                "**➕ 管理者追加** (DB管理として即時反映)\n"
+                "**➖ 管理者削除** (env由来は弾く)"
+            ),
+            inline=False,
+        )
+        e.set_footer(
+            text="DB管理者は他の管理者を追加/削除できません(権限拡散防止)。",
+        )
         return e
 
     @app_commands.command(name="管理", description="管理ダッシュボードを開く")
@@ -1267,8 +1464,8 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message(err, ephemeral=True)
             return
         await interaction.response.send_message(
-            embed=self.dashboard_embed(),
-            view=AdminDashboard(self),
+            embed=self.main_embed(),
+            view=MainAdminView(self),
             ephemeral=True,
         )
 
