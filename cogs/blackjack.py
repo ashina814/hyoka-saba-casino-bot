@@ -123,6 +123,40 @@ class BJView(discord.ui.View):
             return False
         return True
 
+    async def on_timeout(self) -> None:
+        """放置で View が timeout した時の処理。
+
+        - 未確定のハンドを **自動スタンド** 扱いにし、ディーラー進行→精算する
+        - これによりベットが失効せず、戻ってきたら結果が出ている状態に
+        - セッションを self.cog.sessions から確実に削除して、
+          次の entry で「ハンド進行中」と弾かれないようにする
+        """
+        s = self.s
+        if s.finished:
+            # 既に精算済みなら何もしない(sessions からも既に消えている想定)
+            self.cog.sessions.pop(self.user_id, None)
+            return
+        try:
+            # 未確定ハンドを全て stood に
+            for h in s.player_hands:
+                if not h.busted and not h.stood:
+                    h.stood = True
+            await self.cog._dealer_play(s)
+            msg = getattr(s, "message", None)
+            if msg is not None:
+                # 精算メッセージを書き込む(interaction は既に死んでいるので直接 edit)
+                await self.cog._settle_msg(msg, self.user_id, s)
+            else:
+                # メッセージ参照が取れないが、セッションだけは確実にクリーンアップ
+                self.cog.sessions.pop(self.user_id, None)
+        except Exception:  # noqa: BLE001
+            # 何が起きてもセッションは必ず削除して次プレイをブロックしない
+            self.cog.sessions.pop(self.user_id, None)
+            import logging
+            logging.getLogger("casino.blackjack").exception(
+                "BJ on_timeout で例外"
+            )
+
     def refresh_buttons(self) -> None:
         """現在のアクティブハンドに合わせてボタンの enable/disable を更新。"""
         h = self.s.active_hand()

@@ -396,8 +396,11 @@ class EconomySubView(_AdminViewBase):
     @discord.ui.button(label="設定一覧", emoji="📋", row=0,
                        style=discord.ButtonStyle.secondary)
     async def listcfg(self, interaction: discord.Interaction, _: discord.ui.Button):
+        embed, total = await self.cog.settings_embed(0)
         await interaction.response.send_message(
-            embed=await self.cog.settings_embed(), ephemeral=True
+            embed=embed,
+            view=SettingsPageView(self.cog, page=0, total_pages=total),
+            ephemeral=True,
         )
 
     @discord.ui.button(label="設定を変更", emoji="🛠️", row=0,
@@ -674,6 +677,52 @@ class BoostStartModal(discord.ui.Modal, title="🚀 ブースト開始"):
         await interaction.response.send_message(
             f"✅ ブースト開始: ×{mult} を {hours}時間。", ephemeral=True
         )
+
+
+class SettingsPageView(discord.ui.View):
+    """設定一覧のページ送り。"""
+
+    def __init__(self, cog: "AdminCog", page: int = 0,
+                 total_pages: int = 1) -> None:
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.page = page
+        self.total_pages = total_pages
+        self._sync()
+
+    def _sync(self) -> None:
+        for item in self.children:
+            cid = getattr(item, "custom_id", "")
+            if cid == "set:prev":
+                item.disabled = (self.page <= 0)
+            elif cid == "set:next":
+                item.disabled = (self.page >= self.total_pages - 1)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not common.is_admin(self.cog.bot, interaction.user):
+            await interaction.response.send_message(
+                "🚫 管理者専用です。", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="◀ 前", custom_id="set:prev",
+                       style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction: discord.Interaction, _: discord.ui.Button):
+        embed, total = await self.cog.settings_embed(self.page - 1)
+        self.page = max(0, self.page - 1)
+        self.total_pages = total
+        self._sync()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="次 ▶", custom_id="set:next",
+                       style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, _: discord.ui.Button):
+        embed, total = await self.cog.settings_embed(self.page + 1)
+        self.page = min(total - 1, self.page + 1)
+        self.total_pages = total
+        self._sync()
+        await interaction.response.edit_message(embed=embed, view=self)
 
 
 class ShopItemModal(discord.ui.Modal):
@@ -1533,17 +1582,32 @@ class AdminCog(commands.Cog):
                     value="\n".join(lines), inline=False)
         return e
 
-    # ── 設定一覧 ──
-    async def settings_embed(self) -> discord.Embed:
+    # ── 設定一覧(ページング) ──
+    SETTINGS_PER_PAGE = 20  # Discord フィールド25制限の安全マージン
+
+    async def settings_embed(self, page: int = 0) -> tuple[discord.Embed, int]:
+        """設定一覧の指定ページを Embed として返し、総ページ数も返す。
+
+        フィールド25個 + 全体6000字制限を回避するため、20件ずつページング。
+        """
         rows = await self.bot.db.settings_meta()
-        e = common.embed("📋 設定一覧", color=common.COLOR_ADMIN)
-        for r in rows:
+        total_pages = max(1, (len(rows) + self.SETTINGS_PER_PAGE - 1)
+                          // self.SETTINGS_PER_PAGE)
+        page = max(0, min(page, total_pages - 1))
+        start = page * self.SETTINGS_PER_PAGE
+        end = start + self.SETTINGS_PER_PAGE
+        e = common.embed(
+            f"📋 設定一覧 (p{page + 1}/{total_pages})",
+            f"全 **{len(rows)}** 件",
+            color=common.COLOR_ADMIN,
+        )
+        for r in rows[start:end]:
             e.add_field(
                 name=f"{r['key']} = {r['value']}",
                 value=r["label"] or "​",
                 inline=False,
             )
-        return e
+        return e, total_pages
 
     # ── 両替保留一覧 ──
     async def pending_exchange_embed(self) -> discord.Embed:
