@@ -78,7 +78,8 @@ class SlotCog(commands.Cog):
     # ハブ/コマンド共通の入口: ベットプリセット画面を出す
     async def entry(self, interaction: discord.Interaction) -> None:
         await common.send_bet_panel(
-            interaction, self.bot, self._run, title="🎰 スロット — ベット"
+            interaction, self.bot, self._run,
+            title="🎰 スロット — ベット", game_key="slot",
         )
 
     async def _run(self, interaction: discord.Interaction, bet: int) -> None:
@@ -106,6 +107,11 @@ class SlotCog(commands.Cog):
             contrib = economy.jackpot_contribution(db, bet)
             if contrib:
                 await db.jackpot_add(contrib)
+        # 前回ベット記憶(連戦の default にする)
+        try:
+            await db.set_last_bet(user.id, "slot", bet)
+        except Exception:  # noqa: BLE001
+            pass
         # 全体JP: スロット以外の場所でもフックされる横串。当選時は即配布。
         from core import global_jackpot as _gjp
         await _gjp.hook_pve_bet(self.bot, user.id, bet)

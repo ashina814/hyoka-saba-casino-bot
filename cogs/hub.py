@@ -175,6 +175,14 @@ class MoreView(discord.ui.View):
             "殿堂", "🏛️", 1, discord.ButtonStyle.secondary,
             "more:hall", "HallCog",
         ))
+        self.add_item(_RouteButton(
+            "ショップ", "🛒", 2, discord.ButtonStyle.success,
+            "more:shop", "ShopCog", method="shop_entry",
+        ))
+        self.add_item(_RouteButton(
+            "ガチャ", "🎁", 2, discord.ButtonStyle.primary,
+            "more:gacha", "ShopCog", method="gacha_entry",
+        ))
 
 
 # ───────────────────────── Embed ─────────────────────────
@@ -231,6 +239,76 @@ async def hub_embed(bot) -> discord.Embed:
     return e
 
 
+class InviteClaimModal(discord.ui.Modal, title="🎁 招待ボーナス"):
+    inviter = discord.ui.TextInput(
+        label="招待してくれた人のDiscordユーザーID",
+        placeholder="例: 123456789012345678",
+        required=True, max_length=20,
+    )
+
+    def __init__(self, bot, tutorial_view: "TutorialView") -> None:
+        super().__init__()
+        self.bot = bot
+        self.tutorial_view = tutorial_view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not self.bot.db.setting("invite_enabled", True):
+            await interaction.response.send_message(
+                "🛑 招待ボーナス機能は停止中です。", ephemeral=True
+            )
+            return
+        raw = str(self.inviter.value).strip()
+        if not raw.isdigit():
+            await interaction.response.send_message(
+                "⚠️ ユーザーIDは数字のみで入力してください。", ephemeral=True
+            )
+            return
+        inviter_id = int(raw)
+        invitee_id = interaction.user.id
+        # 受取登録
+        ok = await self.bot.db.claim_invite(invitee_id, inviter_id)
+        if not ok:
+            await interaction.response.send_message(
+                "⚠️ 受け取れませんでした(自分自身は対象外、または既に受取済)。",
+                ephemeral=True,
+            )
+            return
+        # ボーナス付与
+        bonus_inviter = int(self.bot.db.setting("invite_bonus_inviter", 1000))
+        bonus_invitee = int(self.bot.db.setting("invite_bonus_invitee", 500))
+        async with self.bot.db.user_lock(invitee_id):
+            await self.bot.db.adjust_balance(
+                invitee_id, bonus_invitee, "invite_bonus_invitee"
+            )
+        # 招待者にも(別ロックで)
+        async with self.bot.db.user_lock(inviter_id):
+            await self.bot.db.adjust_balance(
+                inviter_id, bonus_inviter, "invite_bonus_inviter"
+            )
+        # 招待者へDM通知
+        try:
+            await common.dm_user(
+                self.bot, inviter_id,
+                common.embed(
+                    "🎁 招待ボーナスを獲得!",
+                    f"<@{invitee_id}> があなたを招待者に登録しました。\n"
+                    f"あなたに **{bonus_inviter:,}** チップが付与されました🎉",
+                    color=common.COLOR_WIN,
+                ),
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        await interaction.response.send_message(
+            embed=common.embed(
+                "🎁 招待ボーナス受取完了!",
+                f"あなたに **{bonus_invitee:,}** チップを付与しました。\n"
+                f"招待者の <@{inviter_id}> にも **{bonus_inviter:,}** チップが届きます。",
+                color=common.COLOR_WIN,
+            ),
+            ephemeral=True,
+        )
+
+
 class HubCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
@@ -246,9 +324,85 @@ class HubCog(commands.Cog):
     async def casino(self, interaction: discord.Interaction) -> None:
         if await common.maintenance_guard(interaction):
             return
+        # 初回ユーザーには簡単なチュートリアルを ephemeral で先に出す
+        try:
+            done = await self.bot.db.get_meta(
+                interaction.user.id, "tutorial_done", ""
+            )
+        except Exception:  # noqa: BLE001
+            done = ""
+        if not done:
+            await interaction.response.send_message(
+                embed=_tutorial_embed(self.bot),
+                view=TutorialView(self.bot),
+                ephemeral=True,
+            )
+            return
         await interaction.response.send_message(
             embed=await hub_embed(self.bot), view=HubView(self.bot)
         )
+
+
+def _tutorial_embed(bot) -> discord.Embed:
+    cfg = bot.cfg
+    e = common.embed(
+        "👋 ようこそ！カジノBotへ",
+        f"はじめまして！ここは {cfg.currency_name} を賭けて遊ぶカジノBotです。\n"
+        "初回特典として **初期チップ** が自動で配られています。",
+        color=common.COLOR_MAIN,
+    )
+    e.add_field(
+        name="📌 まずやってみよう",
+        value=(
+            "1. **🎁 デイリー** を押す(1日1回チップが貰える)\n"
+            "2. **🎰 スロット** や **🎲 チンチロ** で軽く遊ぶ\n"
+            "3. **/プロフィール** で残高や統計、称号を確認\n"
+            "4. **✨ もっと** から チャレンジ / おみくじ / 大会"
+        ),
+        inline=False,
+    )
+    e.add_field(
+        name="💡 ヒント",
+        value=(
+            "・ボタン操作中心です(コマンドは `/カジノ` `/プロフィール` `/送金` `/管理` の4つだけ)\n"
+            "・遊び方が分からないゲームは **❓ ルール** を見てください\n"
+            "・1日のベット上限は **/プロフィール → 🛡️制限** で自分で設定できます"
+        ),
+        inline=False,
+    )
+    e.set_footer(text="「了解、はじめる」を押すとメインパネルが開きます")
+    return e
+
+
+class TutorialView(discord.ui.View):
+    def __init__(self, bot) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+
+    @discord.ui.button(label="了解、はじめる", emoji="✅",
+                       style=discord.ButtonStyle.success)
+    async def ok(self, interaction: discord.Interaction, _: discord.ui.Button):
+        try:
+            await self.bot.db.set_meta(interaction.user.id, "tutorial_done", "1")
+        except Exception:  # noqa: BLE001
+            pass
+        # 元の ephemeral メッセージは消して(ボタン無効化)、ハブを新規 ephemeral で送る
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except discord.HTTPException:
+            pass
+        await interaction.followup.send(
+            embed=await hub_embed(self.bot),
+            view=HubView(self.bot),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(label="招待コードがある", emoji="🎁",
+                       style=discord.ButtonStyle.secondary)
+    async def invite(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_modal(InviteClaimModal(self.bot, self))
 
 
 async def setup(bot) -> None:

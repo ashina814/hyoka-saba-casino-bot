@@ -41,6 +41,7 @@ BASE_COGS = [
     "cogs.omikuji",
     "cogs.tournament",
     "cogs.hall",
+    "cogs.shop",
     "cogs.admin",
 ]
 
@@ -115,10 +116,16 @@ class CasinoBot(commands.Bot):
         )
         if not self._wal_loop.is_running():
             self._wal_loop.start()
+        if not self._backup_loop.is_running():
+            self._backup_loop.start()
 
     async def close(self) -> None:
         try:
             self._wal_loop.cancel()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._backup_loop.cancel()
         except Exception:  # noqa: BLE001
             pass
         try:
@@ -136,6 +143,43 @@ class CasinoBot(commands.Bot):
             await self.db.conn.commit()
         except Exception:  # noqa: BLE001
             log.exception("WAL checkpoint で例外")
+
+    # ── 日次自動DBバックアップ ──
+    @tasks.loop(hours=24)
+    async def _backup_loop(self) -> None:
+        """SQLite の online backup を ./backups/<DB名>-YYYY-MM-DD.db に取り、
+        N日(既定14日)より古いバックアップは自動削除する。"""
+        import datetime
+        import os
+        import glob
+        try:
+            backup_dir = os.path.join(
+                os.path.dirname(os.path.abspath(self.cfg.db_path)) or ".",
+                "backups",
+            )
+            os.makedirs(backup_dir, exist_ok=True)
+            base = os.path.splitext(os.path.basename(self.cfg.db_path))[0]
+            today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+            dst = os.path.join(backup_dir, f"{base}-{today}.db")
+            # SQLite ネイティブのオンラインバックアップ(WAL含む整合保証)
+            await self.db.conn.execute(f"VACUUM INTO '{dst}'")
+            log.info("DBバックアップ完了: %s", dst)
+            # 保持日数を超えた古いファイルを削除
+            keep_days = int(self.db.setting("backup_keep_days", 14) or 14)
+            cutoff = (datetime.datetime.utcnow() -
+                      datetime.timedelta(days=keep_days))
+            for path in glob.glob(os.path.join(backup_dir, f"{base}-*.db")):
+                try:
+                    mtime = datetime.datetime.utcfromtimestamp(
+                        os.path.getmtime(path)
+                    )
+                    if mtime < cutoff:
+                        os.remove(path)
+                        log.info("古いバックアップ削除: %s", path)
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001
+            log.exception("DBバックアップで例外")
 
     # ── エラーハンドリング(全部 catch-all) ──
     async def notify_admins(self, title: str, body: str) -> None:

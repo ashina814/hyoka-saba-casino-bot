@@ -107,7 +107,8 @@ class HiloCog(commands.Cog):
 
     async def entry(self, interaction: discord.Interaction) -> None:
         await common.send_bet_panel(
-            interaction, self.bot, self._start, title="📈 ハイロー — ベット"
+            interaction, self.bot, self._start,
+            title="📈 ハイロー — ベット", game_key="hilo",
         )
 
     async def _start(self, interaction: discord.Interaction, bet: int) -> None:
@@ -128,6 +129,10 @@ class HiloCog(commands.Cog):
                     interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
+        try:
+            await db.set_last_bet(user.id, "hilo", bet)
+        except Exception:  # noqa: BLE001
+            pass
         # 全体JP積立&当選判定(横串)
         from core import global_jackpot as _gjp
         await _gjp.hook_pve_bet(self.bot, user.id, bet)

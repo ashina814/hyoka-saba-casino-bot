@@ -186,7 +186,8 @@ class BlackjackCog(commands.Cog):
             )
             return
         await common.send_bet_panel(
-            interaction, self.bot, self._start, title="🃏 ブラックジャック — ベット"
+            interaction, self.bot, self._start,
+            title="🃏 ブラックジャック — ベット", game_key="blackjack",
         )
 
     # ── ハンド開始 ──
@@ -208,6 +209,10 @@ class BlackjackCog(commands.Cog):
                     interaction, content="残高が足りません。", ephemeral=True
                 )
                 return
+        try:
+            await db.set_last_bet(user.id, "blackjack", bet)
+        except Exception:  # noqa: BLE001
+            pass
         # 全体JP積立&当選判定(横串)
         from core import global_jackpot as _gjp
         await _gjp.hook_pve_bet(self.bot, user.id, bet)

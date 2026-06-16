@@ -112,6 +112,34 @@ CREATE TABLE IF NOT EXISTS global_jackpot (
 );
 INSERT OR IGNORE INTO global_jackpot (id, amount) VALUES (1, 0);
 
+-- ───────────────────────── ユーザーごとの軽量メタ ─────────────────────────
+-- チュートリアル済みフラグなど、users 本体に列を増やすほどでもないキー値ペア。
+CREATE TABLE IF NOT EXISTS user_meta (
+    user_id  INTEGER NOT NULL,
+    key      TEXT NOT NULL,
+    value    TEXT NOT NULL,
+    PRIMARY KEY (user_id, key)
+);
+
+-- ───────────────────────── 前回ベット額(ゲーム別) ─────────────────────────
+-- /カジノ → ゲーム → ベットモーダル の default を直近の額にする。
+CREATE TABLE IF NOT EXISTS last_bets (
+    user_id  INTEGER NOT NULL,
+    game     TEXT NOT NULL,         -- 'slot', 'chinchiro', ...
+    bet      INTEGER NOT NULL,
+    ts       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, game)
+);
+
+-- ───────────────────────── 招待ボーナス ─────────────────────────
+-- invitee_id が招待された人(主キー、1人1回のみ受取可)。
+-- inviter_id が招待者。double-spend は PK で防止。
+CREATE TABLE IF NOT EXISTS invites (
+    invitee_id  INTEGER PRIMARY KEY,
+    inviter_id  INTEGER NOT NULL,
+    claimed_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ───────────────────────── 自己制限(依存対策) ─────────────────────────
 -- ユーザーが自発的に設定する1日のベット上限。0=無制限。
 -- 解除には「set_at から24時間」のクールダウンを設けて、衝動的な解除を抑制する。
@@ -129,6 +157,27 @@ CREATE TABLE IF NOT EXISTS admins (
     user_id   INTEGER PRIMARY KEY,
     added_by  INTEGER NOT NULL,
     added_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- ───────────────────────── ショップ購入履歴 ─────────────────────────
+-- 同一商品の再購入は許可しない場合があるので PK 複合(再購入可なら別テーブル)。
+-- ここではコレクション系=1人1個前提。
+CREATE TABLE IF NOT EXISTS shop_purchases (
+    user_id     INTEGER NOT NULL,
+    item_id     TEXT NOT NULL,
+    price       INTEGER NOT NULL,
+    bought_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, item_id)
+);
+
+-- ───────────────────────── ガチャ獲得履歴 ─────────────────────────
+-- 同じ item_id を複数回引いた場合は count を増やす。
+CREATE TABLE IF NOT EXISTS gacha_inventory (
+    user_id     INTEGER NOT NULL,
+    item_id     TEXT NOT NULL,
+    count       INTEGER NOT NULL DEFAULT 0,
+    last_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (user_id, item_id)
 );
 
 -- ───────────────────────── 称号 ─────────────────────────
@@ -229,6 +278,19 @@ INSERT OR IGNORE INTO settings (key, value, vtype, label) VALUES
 
     -- 管理操作の安全設計
     ('admin_confirm_threshold','100000','int','この金額以上の管理操作は理由(reason)入力必須'),
+
+    -- 招待ボーナス
+    ('invite_bonus_inviter', '1000', 'int', '招待した側が貰うボーナス'),
+    ('invite_bonus_invitee', '500',  'int', '招待された側が貰うボーナス'),
+    ('invite_enabled',       '1',    'bool', '招待ボーナス機能 ON/OFF'),
+
+    -- ショップ・ガチャ
+    ('shop_enabled',         '1',    'bool', 'ショップ機能 ON/OFF'),
+    ('gacha_enabled',        '1',    'bool', 'ガチャ機能 ON/OFF'),
+    ('gacha_price',          '500',  'int',  'ガチャ1回の値段'),
+
+    -- 自動バックアップ
+    ('backup_keep_days',     '14',   'int',  'DBバックアップの保持日数'),
 
     -- デイリーチャレンジ
     ('challenges_enabled', '1', 'bool', 'デイリーチャレンジ機能 ON/OFF'),

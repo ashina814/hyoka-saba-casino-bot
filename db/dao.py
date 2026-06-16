@@ -463,6 +463,65 @@ class Database:
         await self.conn.commit()
         return cur.rowcount > 0
 
+    # ───────────────────────── ユーザーメタ ─────────────────────────
+    async def get_meta(self, user_id: int, key: str, default: str = "") -> str:
+        cur = await self.conn.execute(
+            "SELECT value FROM user_meta WHERE user_id=? AND key=?",
+            (user_id, key),
+        )
+        row = await cur.fetchone()
+        return row["value"] if row else default
+
+    async def set_meta(self, user_id: int, key: str, value: str) -> None:
+        await self.conn.execute(
+            "INSERT INTO user_meta (user_id, key, value) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value",
+            (user_id, key, value),
+        )
+        await self.conn.commit()
+
+    # ───────────────────────── 前回ベット ─────────────────────────
+    async def get_last_bet(self, user_id: int, game: str) -> int | None:
+        cur = await self.conn.execute(
+            "SELECT bet FROM last_bets WHERE user_id=? AND game=?",
+            (user_id, game),
+        )
+        row = await cur.fetchone()
+        return int(row["bet"]) if row else None
+
+    async def set_last_bet(self, user_id: int, game: str, bet: int) -> None:
+        await self.conn.execute(
+            "INSERT INTO last_bets (user_id, game, bet, ts) "
+            "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+            "ON CONFLICT(user_id, game) DO UPDATE SET "
+            "bet=excluded.bet, ts=excluded.ts",
+            (user_id, game, bet),
+        )
+        await self.conn.commit()
+
+    # ───────────────────────── 招待 ─────────────────────────
+    async def claim_invite(
+        self, invitee_id: int, inviter_id: int
+    ) -> bool:
+        """招待ボーナス受取。既に受取済み or 自己招待なら False。"""
+        if invitee_id == inviter_id:
+            return False
+        try:
+            await self.conn.execute(
+                "INSERT INTO invites (invitee_id, inviter_id) VALUES (?, ?)",
+                (invitee_id, inviter_id),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    async def has_claimed_invite(self, invitee_id: int) -> bool:
+        cur = await self.conn.execute(
+            "SELECT 1 FROM invites WHERE invitee_id=?", (invitee_id,)
+        )
+        return (await cur.fetchone()) is not None
+
     # ───────────────────────── 自己制限 ─────────────────────────
     async def get_user_limit(self, user_id: int) -> dict[str, Any]:
         cur = await self.conn.execute(
@@ -495,6 +554,53 @@ class Database:
             (user_id,),
         )
         return int((await cur.fetchone())["v"])
+
+    # ───────────────────────── ショップ ─────────────────────────
+    async def shop_owned(self, user_id: int) -> set[str]:
+        cur = await self.conn.execute(
+            "SELECT item_id FROM shop_purchases WHERE user_id=?",
+            (user_id,),
+        )
+        return {r["item_id"] for r in await cur.fetchall()}
+
+    async def shop_buy(self, user_id: int, item_id: str, price: int) -> bool:
+        """購入記録。既に持っていれば False。"""
+        try:
+            await self.conn.execute(
+                "INSERT INTO shop_purchases (user_id, item_id, price) "
+                "VALUES (?, ?, ?)",
+                (user_id, item_id, price),
+            )
+            await self.conn.commit()
+            return True
+        except Exception:
+            return False
+
+    # ───────────────────────── ガチャ ─────────────────────────
+    async def gacha_add(self, user_id: int, item_id: str) -> int:
+        await self.conn.execute(
+            "INSERT INTO gacha_inventory (user_id, item_id, count, last_at) "
+            "VALUES (?, ?, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+            "ON CONFLICT(user_id, item_id) DO UPDATE SET "
+            "count = count + 1, "
+            "last_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+            (user_id, item_id),
+        )
+        await self.conn.commit()
+        cur = await self.conn.execute(
+            "SELECT count FROM gacha_inventory WHERE user_id=? AND item_id=?",
+            (user_id, item_id),
+        )
+        row = await cur.fetchone()
+        return int(row["count"]) if row else 0
+
+    async def gacha_inventory(self, user_id: int) -> list[aiosqlite.Row]:
+        cur = await self.conn.execute(
+            "SELECT item_id, count, last_at FROM gacha_inventory "
+            "WHERE user_id=? ORDER BY last_at DESC",
+            (user_id,),
+        )
+        return list(await cur.fetchall())
 
     # ───────────────────────── 大会 ─────────────────────────
     async def start_tournament(

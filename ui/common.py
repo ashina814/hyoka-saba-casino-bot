@@ -91,6 +91,10 @@ TX_REASON_LABEL = {
     "omikuji_bonus": "おみくじボーナス",
     "global_jp_win": "🌟 全体JP獲得",
     "tournament_prize": "🏆 大会賞金",
+    "invite_bonus_inviter": "🎁 招待ボーナス(招待した)",
+    "invite_bonus_invitee": "🎁 招待ボーナス(招待された)",
+    "shop_buy": "🛒 ショップ購入",
+    "gacha_pull": "🎁 ガチャ",
 }
 
 
@@ -302,15 +306,18 @@ class BetPresetView(discord.ui.View):
     on_pick_cb は async (interaction, bet) を受ける、各ゲーム Cog の `_start`。
     起票者(user_id)のみ操作可。120秒で自動失効。
     HALF/MAX は現在残高に対する半分/全額、+100/+1k/+1万は固定額のプリセット。
+    last_bet を渡すと「金額を入力」モーダルの default に入る(連戦UX向上)。
     """
 
     def __init__(self, bot, user_id: int, on_pick_cb,
-                 title: str = "ベット額を選択") -> None:
+                 title: str = "ベット額を選択",
+                 last_bet: int | None = None) -> None:
         super().__init__(timeout=120)
         self.bot = bot
         self.user_id = user_id
         self._cb = on_pick_cb
         self.title = title
+        self.last_bet = last_bet
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id:
@@ -368,7 +375,10 @@ class BetPresetView(discord.ui.View):
     @discord.ui.button(label="金額を入力", emoji="✏️",
                        row=1, style=discord.ButtonStyle.success)
     async def custom(self, interaction: discord.Interaction, _: discord.ui.Button):
-        await interaction.response.send_modal(BetModal(self.bot, self.title, self._cb))
+        default = str(self.last_bet) if self.last_bet else None
+        await interaction.response.send_modal(
+            BetModal(self.bot, self.title, self._cb, default=default)
+        )
 
     async def on_timeout(self) -> None:
         for item in self.children:
@@ -376,19 +386,33 @@ class BetPresetView(discord.ui.View):
 
 
 async def send_bet_panel(
-    interaction: discord.Interaction, bot, on_pick_cb, *, title: str
+    interaction: discord.Interaction, bot, on_pick_cb, *,
+    title: str, game_key: str | None = None,
 ) -> None:
-    """各ゲームの `entry` から呼ぶ共通エントリ。ベットプリセット画面を ephemeral で送る。"""
-    view = BetPresetView(bot, interaction.user.id, on_pick_cb, title=title)
+    """各ゲームの `entry` から呼ぶ共通エントリ。ベットプリセット画面を ephemeral で送る。
+
+    game_key を渡すと、そのユーザーの直近の同ゲームベット額を取得して
+    「金額を入力」のデフォルトに入れる(連戦UX)。
+    """
+    last_bet: int | None = None
+    if game_key:
+        try:
+            last_bet = await bot.db.get_last_bet(interaction.user.id, game_key)
+        except Exception:  # noqa: BLE001
+            last_bet = None
+    view = BetPresetView(
+        bot, interaction.user.id, on_pick_cb, title=title, last_bet=last_bet,
+    )
     bal = await bot.db.get_balance(interaction.user.id)
     lo = int(bot.db.setting("min_bet", 10))
     hi = int(bot.db.setting("max_bet", 100000))
-    e = embed(
-        title,
+    desc = (
         f"クイック選択するか「✏️ 金額を入力」で自由入力。\n"
-        f"現在残高: **{bal:,}**  /  範囲: {lo:,} 〜 {hi:,}",
-        color=COLOR_INFO,
+        f"現在残高: **{bal:,}**  /  範囲: {lo:,} 〜 {hi:,}"
     )
+    if last_bet:
+        desc += f"\n直近のベット: **{last_bet:,}**"
+    e = embed(title, desc, color=COLOR_INFO)
     if interaction.response.is_done():
         await interaction.followup.send(embed=e, view=view, ephemeral=True)
     else:
@@ -402,17 +426,20 @@ class BetModal(discord.ui.Modal):
     金額パース・範囲検証もここで行い、問題があればエラーを返す。
     """
 
-    amount = discord.ui.TextInput(
-        label="ベット額",
-        placeholder="例: 100 / 1k / 1.5万",
-        required=True,
-        max_length=12,
-    )
-
-    def __init__(self, bot, title: str, on_submit_cb) -> None:
+    def __init__(self, bot, title: str, on_submit_cb,
+                 default: str | None = None) -> None:
         super().__init__(title=title)
         self.bot = bot
         self._cb = on_submit_cb
+        # default を持つ TextInput を動的に組み立てる(クラス属性ではユーザー別の値を持てない)
+        self.amount = discord.ui.TextInput(
+            label="ベット額",
+            placeholder="例: 100 / 1k / 1.5万",
+            required=True,
+            max_length=12,
+            default=default or "",
+        )
+        self.add_item(self.amount)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
