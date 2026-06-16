@@ -555,6 +555,78 @@ class Database:
         )
         return int((await cur.fetchone())["v"])
 
+    # ───────────────────────── ショップ商品(マスタ) ─────────────────────────
+    async def list_shop_items(self, only_enabled: bool = True) -> list[aiosqlite.Row]:
+        where = "WHERE enabled = 1" if only_enabled else ""
+        cur = await self.conn.execute(
+            f"SELECT id, label, emoji, price, description, sort_order, enabled "
+            f"FROM shop_items {where} ORDER BY sort_order, price"
+        )
+        return list(await cur.fetchall())
+
+    async def get_shop_item(self, item_id: str) -> aiosqlite.Row | None:
+        cur = await self.conn.execute(
+            "SELECT id, label, emoji, price, description, sort_order, enabled "
+            "FROM shop_items WHERE id = ?", (item_id,),
+        )
+        return await cur.fetchone()
+
+    async def upsert_shop_item(
+        self, item_id: str, label: str, emoji: str, price: int,
+        description: str = "", sort_order: int = 0, enabled: bool = True,
+    ) -> bool:
+        """新規追加 or 既存更新。新規なら True、更新なら False。"""
+        existing = await self.get_shop_item(item_id)
+        if existing is None:
+            await self.conn.execute(
+                "INSERT INTO shop_items (id, label, emoji, price, description, "
+                "sort_order, enabled) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (item_id, label, emoji, price, description, sort_order,
+                 1 if enabled else 0),
+            )
+            await self.conn.commit()
+            return True
+        await self.conn.execute(
+            "UPDATE shop_items SET label=?, emoji=?, price=?, description=?, "
+            "sort_order=?, enabled=? WHERE id=?",
+            (label, emoji, price, description, sort_order,
+             1 if enabled else 0, item_id),
+        )
+        await self.conn.commit()
+        return False
+
+    async def shop_set_enabled(self, item_id: str, enabled: bool) -> bool:
+        cur = await self.conn.execute(
+            "UPDATE shop_items SET enabled=? WHERE id=?",
+            (1 if enabled else 0, item_id),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def delete_shop_item(self, item_id: str) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM shop_items WHERE id=?", (item_id,)
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def seed_shop_items(self, items: list[dict]) -> int:
+        """初回起動時用の冪等シード。既に存在する id はスキップ。新規挿入数を返す。"""
+        inserted = 0
+        for i, it in enumerate(items):
+            existing = await self.get_shop_item(it["id"])
+            if existing is not None:
+                continue
+            await self.conn.execute(
+                "INSERT INTO shop_items (id, label, emoji, price, description, "
+                "sort_order, enabled) VALUES (?, ?, ?, ?, ?, ?, 1)",
+                (it["id"], it["label"], it["emoji"], it["price"],
+                 it.get("description", ""), it.get("sort_order", i)),
+            )
+            inserted += 1
+        await self.conn.commit()
+        return inserted
+
     # ───────────────────────── ショップ ─────────────────────────
     async def shop_owned(self, user_id: int) -> set[str]:
         cur = await self.conn.execute(

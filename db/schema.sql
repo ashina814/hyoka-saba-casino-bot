@@ -159,6 +159,20 @@ CREATE TABLE IF NOT EXISTS admins (
     added_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- ───────────────────────── ショップ商品(DB管理) ─────────────────────────
+-- 商品はコード固定ではなく DB に持ち、運営が /管理 → ショップ管理 から
+-- 追加/編集/削除/ON-OFF できる。起動時に既定商品が冪等投入される。
+CREATE TABLE IF NOT EXISTS shop_items (
+    id          TEXT PRIMARY KEY,        -- 'title_legend' 等の識別子
+    label       TEXT NOT NULL,
+    emoji       TEXT NOT NULL,
+    price       INTEGER NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    enabled     INTEGER NOT NULL DEFAULT 1,  -- 0=販売停止
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ───────────────────────── ショップ購入履歴 ─────────────────────────
 -- 同一商品の再購入は許可しない場合があるので PK 複合(再購入可なら別テーブル)。
 -- ここではコレクション系=1人1個前提。

@@ -454,6 +454,15 @@ class EconomySubView(_AdminViewBase):
             "✅ ブーストを停止しました。", ephemeral=True
         )
 
+    @discord.ui.button(label="🛒 ショップ管理", row=2,
+                       style=discord.ButtonStyle.success)
+    async def manage_shop(self, interaction: discord.Interaction,
+                          _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=await self.cog.shop_admin_embed(),
+            view=ShopAdminSubView(self.cog),
+        )
+
     @discord.ui.button(label="お喋りCH をここに", emoji="📢", row=2,
                        style=discord.ButtonStyle.primary)
     async def set_chat_ch(self, interaction: discord.Interaction,
@@ -664,6 +673,212 @@ class BoostStartModal(discord.ui.Modal, title="🚀 ブースト開始"):
         )
         await interaction.response.send_message(
             f"✅ ブースト開始: ×{mult} を {hours}時間。", ephemeral=True
+        )
+
+
+class ShopItemModal(discord.ui.Modal):
+    """商品の新規追加 or 既存編集。id が既存なら上書き、新規なら追加。"""
+
+    def __init__(self, cog: "AdminCog", item_id: str | None = None) -> None:
+        title = f"商品編集 — {item_id}" if item_id else "🛒 商品追加"
+        super().__init__(title=title)
+        self.cog = cog
+        self.item_id_locked = item_id  # 編集時は id 変更不可
+        if item_id:
+            self.id_input = None
+            preset = None  # 後で _prefill
+        else:
+            self.id_input = discord.ui.TextInput(
+                label="商品ID(半角英数/_、変更後不可)",
+                placeholder="例: title_emperor", required=True, max_length=40,
+            )
+            self.add_item(self.id_input)
+        self.label_input = discord.ui.TextInput(
+            label="表示名", placeholder="例: 皇帝",
+            required=True, max_length=40,
+        )
+        self.add_item(self.label_input)
+        self.emoji_input = discord.ui.TextInput(
+            label="絵文字(Discord標準絵文字)",
+            placeholder="例: 👑", required=True, max_length=8,
+        )
+        self.add_item(self.emoji_input)
+        self.price_input = discord.ui.TextInput(
+            label="価格(チップ)", placeholder="例: 500000",
+            required=True, max_length=12,
+        )
+        self.add_item(self.price_input)
+        self.desc_input = discord.ui.TextInput(
+            label="説明(短文)", required=False, max_length=120,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(self.desc_input)
+
+    async def prefill(self, row) -> None:
+        """編集時に既存値をデフォルトに入れて再構築する場合に使う(代替手段)。
+        現状は Discord Modal が default 引数を持つので、init で渡せばよい。"""
+        # 簡素化のため未使用
+        return None
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        item_id = (self.item_id_locked
+                   or str(self.id_input.value).strip())  # type: ignore[union-attr]
+        if not item_id or not all(
+                c.isalnum() or c == "_" for c in item_id):
+            await interaction.response.send_message(
+                "⚠️ 商品IDは半角英数とアンダースコアのみで入力してください。",
+                ephemeral=True,
+            )
+            return
+        try:
+            price = common.parse_bet(str(self.price_input.value))
+        except ValueError as e:
+            await interaction.response.send_message(f"⚠️ {e}", ephemeral=True)
+            return
+        label = str(self.label_input.value).strip()[:40]
+        emoji = str(self.emoji_input.value).strip()[:8]
+        desc = str(self.desc_input.value).strip()[:120]
+
+        is_new = await self.cog.bot.db.upsert_shop_item(
+            item_id, label, emoji, price, desc, sort_order=price, enabled=True,
+        )
+        action = "追加" if is_new else "更新"
+        await self.cog.bot.db.log_admin(
+            interaction.user.id, "shop_item_upsert", None,
+            f"id={item_id} action={action} price={price}",
+        )
+        await self.cog._post_audit_log(
+            interaction, f"🛒 商品{action}: {emoji} {label} (id={item_id}) — {price:,}"
+        )
+        await interaction.response.send_message(
+            f"✅ 商品を{action}しました: {emoji} **{label}** ({price:,})",
+            ephemeral=True,
+        )
+
+
+class ShopItemSelect(discord.ui.Select):
+    """既存商品をセレクトメニューで選び、編集/ON-OFF/削除に分岐。"""
+
+    def __init__(self, cog: "AdminCog", rows, action: str) -> None:
+        self.cog = cog
+        self.action = action   # 'edit' | 'toggle' | 'delete'
+        options = [
+            discord.SelectOption(
+                label=f"{r['label']} ({r['price']:,})",
+                value=r["id"], emoji=r["emoji"],
+                description=("販売中" if int(r["enabled"]) else "停止中")[:100],
+            )
+            for r in rows[:25]
+        ]
+        ph = {"edit": "編集する商品を選択",
+              "toggle": "ON/OFF切替する商品を選択",
+              "delete": "削除する商品を選択"}[action]
+        super().__init__(placeholder=ph, options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        item_id = self.values[0]
+        db = self.cog.bot.db
+        row = await db.get_shop_item(item_id)
+        if row is None:
+            await interaction.response.send_message(
+                "⚠️ 商品が見つかりません。", ephemeral=True
+            )
+            return
+        if self.action == "edit":
+            # 編集モーダルを開く(既存値を default に)
+            m = ShopItemModal(self.cog, item_id=item_id)
+            m.label_input.default = row["label"]
+            m.emoji_input.default = row["emoji"]
+            m.price_input.default = str(int(row["price"]))
+            m.desc_input.default = row["description"]
+            await interaction.response.send_modal(m)
+        elif self.action == "toggle":
+            new_enabled = not int(row["enabled"])
+            await db.shop_set_enabled(item_id, new_enabled)
+            label = "🟢 販売中" if new_enabled else "🛑 販売停止"
+            await db.log_admin(
+                interaction.user.id, "shop_item_toggle",
+                None, f"id={item_id} -> {label}"
+            )
+            await self.cog._post_audit_log(
+                interaction, f"🛒 商品ON/OFF: {row['emoji']} {row['label']} → {label}"
+            )
+            await interaction.response.send_message(
+                f"✅ `{row['label']}` を {label} にしました。",
+                ephemeral=True,
+            )
+        else:  # delete
+            await db.delete_shop_item(item_id)
+            await db.log_admin(
+                interaction.user.id, "shop_item_delete", None, f"id={item_id}"
+            )
+            await self.cog._post_audit_log(
+                interaction, f"🛒 商品削除: {row['emoji']} {row['label']} (id={item_id})"
+            )
+            await interaction.response.send_message(
+                f"🗑️ `{row['label']}` を削除しました。", ephemeral=True
+            )
+
+
+class ShopAdminSubView(_AdminViewBase):
+    """🛒 ショップ管理: 商品の追加/編集/ON-OFF/削除。"""
+
+    @discord.ui.button(label="➕ 商品追加", row=0,
+                       style=discord.ButtonStyle.success)
+    async def add(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.send_modal(ShopItemModal(self.cog))
+
+    @discord.ui.button(label="✏️ 商品編集", row=0,
+                       style=discord.ButtonStyle.primary)
+    async def edit(self, interaction: discord.Interaction, _: discord.ui.Button):
+        rows = await self.cog.bot.db.list_shop_items(only_enabled=False)
+        if not rows:
+            await interaction.response.send_message(
+                "登録商品がありません。", ephemeral=True
+            )
+            return
+        v = discord.ui.View(timeout=120)
+        v.add_item(ShopItemSelect(self.cog, rows, "edit"))
+        await interaction.response.send_message(
+            "編集する商品を選んでください。", view=v, ephemeral=True
+        )
+
+    @discord.ui.button(label="🔁 ON/OFF 切替", row=0,
+                       style=discord.ButtonStyle.secondary)
+    async def toggle(self, interaction: discord.Interaction, _: discord.ui.Button):
+        rows = await self.cog.bot.db.list_shop_items(only_enabled=False)
+        if not rows:
+            await interaction.response.send_message(
+                "登録商品がありません。", ephemeral=True
+            )
+            return
+        v = discord.ui.View(timeout=120)
+        v.add_item(ShopItemSelect(self.cog, rows, "toggle"))
+        await interaction.response.send_message(
+            "ON/OFF切替する商品を選んでください。", view=v, ephemeral=True
+        )
+
+    @discord.ui.button(label="🗑️ 削除", row=0,
+                       style=discord.ButtonStyle.danger)
+    async def delete(self, interaction: discord.Interaction, _: discord.ui.Button):
+        rows = await self.cog.bot.db.list_shop_items(only_enabled=False)
+        if not rows:
+            await interaction.response.send_message(
+                "登録商品がありません。", ephemeral=True
+            )
+            return
+        v = discord.ui.View(timeout=120)
+        v.add_item(ShopItemSelect(self.cog, rows, "delete"))
+        await interaction.response.send_message(
+            "削除する商品を選んでください(復元不可)。", view=v, ephemeral=True
+        )
+
+    @discord.ui.button(label="⬅️ 戻る", row=4,
+                       style=discord.ButtonStyle.secondary)
+    async def back(self, interaction: discord.Interaction, _: discord.ui.Button):
+        await interaction.response.edit_message(
+            embed=self.cog.economy_embed(),
+            view=EconomySubView(self.cog),
         )
 
 
@@ -1291,6 +1506,31 @@ class AdminCog(commands.Cog):
                 value="(なし)",
                 inline=False,
             )
+        return e
+
+    # ── ショップ管理 ──
+    async def shop_admin_embed(self) -> discord.Embed:
+        rows = await self.bot.db.list_shop_items(only_enabled=False)
+        e = common.embed(
+            "🛒 ショップ管理",
+            "商品の **追加 / 編集 / ON-OFF / 削除** をここから行えます。\n"
+            "商品IDは半角英数とアンダースコアのみ。同じIDで上書きすると編集扱い。",
+            color=common.COLOR_ADMIN,
+        )
+        if not rows:
+            e.add_field(
+                name="登録商品", value="まだ商品がありません。", inline=False,
+            )
+            return e
+        lines = []
+        for r in rows:
+            mark = "🟢" if int(r["enabled"]) else "🛑"
+            lines.append(
+                f"{mark} {r['emoji']} **{r['label']}**  ({int(r['price']):,})  "
+                f"`id={r['id']}`\n　_{r['description'] or ''}_"
+            )
+        e.add_field(name=f"登録商品 ({len(rows)})",
+                    value="\n".join(lines), inline=False)
         return e
 
     # ── 設定一覧 ──

@@ -24,6 +24,8 @@ _RNG = secrets.SystemRandom()
 # ───────────────────────── 商品定義 ─────────────────────────
 @dataclass(frozen=True)
 class ShopItem:
+    """旧コード固定構造体。新規ロジックは DB の Row を直接使い、
+    この dataclass は後方互換の View 側で使われるのみ。"""
     id: str
     label: str
     emoji: str
@@ -31,23 +33,30 @@ class ShopItem:
     description: str
 
 
-SHOP_ITEMS: list[ShopItem] = [
-    ShopItem("title_rookie",     "新人ハンター",    "🔰", 2000,
-             "カジノに来たての証"),
-    ShopItem("title_gambler",    "ギャンブラー",    "🎲", 5000,
-             "それなりの修羅場をくぐった"),
-    ShopItem("title_highroller", "ハイローラー",    "💎", 20000,
-             "大金を躊躇なく賭ける度胸の称号"),
-    ShopItem("title_card_master","カードマスター",  "🃏", 15000,
-             "ポーカー/BJ系の達人"),
-    ShopItem("title_lucky_star", "幸運の星",       "⭐", 10000,
-             "運だけは誰にも負けない"),
-    ShopItem("title_night_owl",  "夜の住人",       "🦉", 8000,
-             "深夜カジノの常連"),
-    ShopItem("title_legend",     "伝説",          "👑", 2000000,
-             "もはや畏怖の対象"),
+# DB 未初期化時の初期商品(冪等シード)。/管理 から後で編集可能。
+DEFAULT_SHOP_ITEMS: list[dict] = [
+    {"id": "title_rookie",     "label": "新人ハンター",    "emoji": "🔰", "price": 2000,
+     "description": "カジノに来たての証"},
+    {"id": "title_gambler",    "label": "ギャンブラー",    "emoji": "🎲", "price": 5000,
+     "description": "それなりの修羅場をくぐった"},
+    {"id": "title_night_owl",  "label": "夜の住人",       "emoji": "🦉", "price": 8000,
+     "description": "深夜カジノの常連"},
+    {"id": "title_lucky_star", "label": "幸運の星",       "emoji": "⭐", "price": 10000,
+     "description": "運だけは誰にも負けない"},
+    {"id": "title_card_master","label": "カードマスター",  "emoji": "🃏", "price": 15000,
+     "description": "ポーカー/BJ系の達人"},
+    {"id": "title_highroller", "label": "ハイローラー",    "emoji": "💎", "price": 20000,
+     "description": "大金を躊躇なく賭ける度胸の称号"},
+    {"id": "title_legend",     "label": "伝説",          "emoji": "👑", "price": 2000000,
+     "description": "もはや畏怖の対象"},
 ]
-SHOP_BY_ID = {it.id: it for it in SHOP_ITEMS}
+
+
+def _row_to_item(row) -> ShopItem:
+    return ShopItem(
+        id=row["id"], label=row["label"], emoji=row["emoji"],
+        price=int(row["price"]), description=row["description"],
+    )
 
 
 # ───────────────────────── ガチャアイテム定義 ─────────────────────────
@@ -105,12 +114,15 @@ def _probability(it: GachaItem) -> float:
 
 # ───────────────────────── ショップ View ─────────────────────────
 class ShopView(discord.ui.View):
-    def __init__(self, cog: "ShopCog", user_id: int, owned: set[str]) -> None:
+    def __init__(
+        self, cog: "ShopCog", user_id: int, owned: set[str],
+        items: list[ShopItem],
+    ) -> None:
         super().__init__(timeout=180)
         self.cog = cog
         self.user_id = user_id
         # 未所有のものだけ「購入」ボタンを並べる(最大10、Discord制限内に収める)
-        candidates = [it for it in SHOP_ITEMS if it.id not in owned][:10]
+        candidates = [it for it in items if it.id not in owned][:10]
         for it in candidates:
             self.add_item(self._BuyButton(it))
 
@@ -174,6 +186,24 @@ class ShopCog(commands.Cog):
     def __init__(self, bot) -> None:
         self.bot = bot
 
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        """起動時に初期商品を冪等シード(既存DBは触らない)。"""
+        try:
+            inserted = await self.bot.db.seed_shop_items(DEFAULT_SHOP_ITEMS)
+            if inserted:
+                import logging
+                logging.getLogger("casino.shop").info(
+                    "ショップ初期商品を %d 件投入", inserted
+                )
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("casino.shop").exception("ショップ初期化失敗")
+
+    async def _load_items(self) -> list[ShopItem]:
+        rows = await self.bot.db.list_shop_items(only_enabled=True)
+        return [_row_to_item(r) for r in rows]
+
     # ── ショップ ──
     async def shop_entry(self, interaction: discord.Interaction) -> None:
         if not self.bot.db.setting("shop_enabled", True):
@@ -183,13 +213,16 @@ class ShopCog(commands.Cog):
             return
         bal = await self.bot.db.get_balance(interaction.user.id)
         owned = await self.bot.db.shop_owned(interaction.user.id)
+        items = await self._load_items()
         await interaction.response.send_message(
-            embed=self._shop_embed(bal, owned),
-            view=ShopView(self, interaction.user.id, owned),
+            embed=self._shop_embed(bal, owned, items),
+            view=ShopView(self, interaction.user.id, owned, items),
             ephemeral=True,
         )
 
-    def _shop_embed(self, balance: int, owned: set[str]) -> discord.Embed:
+    def _shop_embed(
+        self, balance: int, owned: set[str], items: list[ShopItem],
+    ) -> discord.Embed:
         e = common.embed(
             "🛒 ショップ",
             f"現在残高: **{balance:,}**\n"
@@ -198,13 +231,15 @@ class ShopCog(commands.Cog):
             color=common.COLOR_MAIN,
         )
         owned_lines = []
-        for it in SHOP_ITEMS:
+        for it in items:
             if it.id in owned:
                 owned_lines.append(f"✅ {it.emoji} {it.label}")
             else:
                 owned_lines.append(
                     f"▫️ {it.emoji} **{it.label}** ({it.price:,}) — _{it.description}_"
                 )
+        if not owned_lines:
+            owned_lines = ["(商品が登録されていません)"]
         e.add_field(name="商品", value="\n".join(owned_lines), inline=False)
         e.set_footer(text="購入は下のボタンから。所有済みは表示されません。")
         return e
@@ -219,6 +254,14 @@ class ShopCog(commands.Cog):
             return
         db = self.bot.db
         user_id = interaction.user.id
+        # 取引前に DB で「販売中」「価格が変わっていないか」を再確認
+        latest = await db.get_shop_item(item.id)
+        if latest is None or not int(latest["enabled"]):
+            await interaction.response.send_message(
+                "⚠️ この商品はもう販売されていません。", ephemeral=True
+            )
+            return
+        price = int(latest["price"])
         owned = await db.shop_owned(user_id)
         if item.id in owned:
             await interaction.response.send_message(
@@ -227,19 +270,19 @@ class ShopCog(commands.Cog):
             return
         async with db.user_lock(user_id):
             try:
-                await db.adjust_balance(user_id, -item.price, "shop_buy")
+                await db.adjust_balance(user_id, -price, "shop_buy")
             except Exception:  # InsufficientFunds 等
                 await interaction.response.send_message(
-                    f"残高が足りません(必要: {item.price:,})。", ephemeral=True
+                    f"残高が足りません(必要: {price:,})。", ephemeral=True
                 )
                 return
-            await db.shop_buy(user_id, item.id, item.price)
+            await db.shop_buy(user_id, item.id, price)
         # 称号としても付与(プロフィールの🏅称号タブに反映)
         await db.award_badge(user_id, f"shop_{item.id}")
         await interaction.response.send_message(
             embed=common.embed(
                 f"🎉 {item.emoji} {item.label} を購入！",
-                f"**{item.price:,}** を支払いました。\n"
+                f"**{price:,}** を支払いました。\n"
                 "プロフィールの 🏅称号 タブで表示されます。",
                 color=common.COLOR_WIN,
             ),
@@ -248,10 +291,11 @@ class ShopCog(commands.Cog):
         # ショップパネルも更新
         new_owned = await db.shop_owned(user_id)
         bal = await db.get_balance(user_id)
+        items = await self._load_items()
         try:
             await interaction.message.edit(  # type: ignore[union-attr]
-                embed=self._shop_embed(bal, new_owned),
-                view=ShopView(self, user_id, new_owned),
+                embed=self._shop_embed(bal, new_owned, items),
+                view=ShopView(self, user_id, new_owned, items),
             )
         except (discord.HTTPException, AttributeError):
             pass
