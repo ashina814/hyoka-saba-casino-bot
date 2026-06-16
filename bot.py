@@ -138,40 +138,70 @@ class CasinoBot(commands.Bot):
     # ── SQLite WAL の自動チェックポイント ──
     @tasks.loop(hours=1)
     async def _wal_loop(self) -> None:
+        """別スレッドで別接続を開いて checkpoint。メイン接続と競合しない。"""
+        def _do() -> None:
+            import sqlite3
+            with sqlite3.connect(self.cfg.db_path, timeout=10) as c:
+                c.execute("PRAGMA wal_checkpoint(PASSIVE)")
         try:
-            await self.db.conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-            await self.db.conn.commit()
+            await asyncio.to_thread(_do)
         except Exception:  # noqa: BLE001
             log.exception("WAL checkpoint で例外")
 
     # ── 日次自動DBバックアップ ──
     @tasks.loop(hours=24)
     async def _backup_loop(self) -> None:
-        """SQLite の online backup を ./backups/<DB名>-YYYY-MM-DD.db に取り、
-        N日(既定14日)より古いバックアップは自動削除する。"""
+        """SQLite の online backup API を ./backups/<DB名>-YYYY-MM-DD.db に取る。
+        N日(既定14日)より古いバックアップは自動削除する。
+
+        - メイン aiosqlite 接続は触らず、別接続をスレッドで開く。
+          これにより本番運用中(常にクエリが流れる)でも安全に取れる。
+        - sqlite3.Connection.backup() は WAL を含めた整合性を保証する
+          公式オンラインバックアップAPI。
+        """
         import datetime
         import os
         import glob
+        backup_dir = os.path.join(
+            os.path.dirname(os.path.abspath(self.cfg.db_path)) or ".",
+            "backups",
+        )
+        os.makedirs(backup_dir, exist_ok=True)
+        base = os.path.splitext(os.path.basename(self.cfg.db_path))[0]
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        dst = os.path.join(backup_dir, f"{base}-{today}.db")
+
+        def _do_backup() -> None:
+            import sqlite3
+            src = sqlite3.connect(self.cfg.db_path, timeout=30)
+            try:
+                # 既存ファイルがあれば上書き(同日2回呼ばれても最新で保存)
+                if os.path.exists(dst):
+                    os.remove(dst)
+                dest = sqlite3.connect(dst)
+                try:
+                    src.backup(dest)
+                finally:
+                    dest.close()
+            finally:
+                src.close()
+
         try:
-            backup_dir = os.path.join(
-                os.path.dirname(os.path.abspath(self.cfg.db_path)) or ".",
-                "backups",
-            )
-            os.makedirs(backup_dir, exist_ok=True)
-            base = os.path.splitext(os.path.basename(self.cfg.db_path))[0]
-            today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-            dst = os.path.join(backup_dir, f"{base}-{today}.db")
-            # SQLite ネイティブのオンラインバックアップ(WAL含む整合保証)
-            await self.db.conn.execute(f"VACUUM INTO '{dst}'")
+            await asyncio.to_thread(_do_backup)
             log.info("DBバックアップ完了: %s", dst)
-            # 保持日数を超えた古いファイルを削除
+        except Exception:  # noqa: BLE001
+            log.exception("DBバックアップで例外")
+            return
+
+        # 古いバックアップ削除
+        try:
             keep_days = int(self.db.setting("backup_keep_days", 14) or 14)
-            cutoff = (datetime.datetime.utcnow() -
+            cutoff = (datetime.datetime.now(datetime.timezone.utc) -
                       datetime.timedelta(days=keep_days))
             for path in glob.glob(os.path.join(backup_dir, f"{base}-*.db")):
                 try:
-                    mtime = datetime.datetime.utcfromtimestamp(
-                        os.path.getmtime(path)
+                    mtime = datetime.datetime.fromtimestamp(
+                        os.path.getmtime(path), tz=datetime.timezone.utc,
                     )
                     if mtime < cutoff:
                         os.remove(path)
@@ -179,7 +209,7 @@ class CasinoBot(commands.Bot):
                 except OSError:
                     pass
         except Exception:  # noqa: BLE001
-            log.exception("DBバックアップで例外")
+            log.exception("古いバックアップ削除で例外")
 
     # ── エラーハンドリング(全部 catch-all) ──
     async def notify_admins(self, title: str, body: str) -> None:
