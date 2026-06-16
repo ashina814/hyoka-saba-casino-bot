@@ -83,38 +83,20 @@ class SlotCog(commands.Cog):
         )
 
     async def _run(self, interaction: discord.Interaction, bet: int) -> None:
+        from core import pve_base
         db = self.bot.db
         cfg = self.bot.cfg
         user = interaction.user
 
-        # 自己制限チェック(凍結よりも先に伝える)
-        if await common.self_limit_guard(interaction, bet):
+        # 共通: 自己制限/凍結/引き落とし/last_bet/全体JP積立
+        contrib = economy.jackpot_contribution(db, bet)
+        ok = await pve_base.take_bet(
+            self.bot, interaction, user.id, bet,
+            reason="slot_bet", game_key="slot",
+            extra_contrib=contrib,
+        )
+        if not ok:
             return
-        async with db.user_lock(user.id):
-            if await db.is_frozen(user.id):
-                await common.respond_with(
-                    interaction, content="🧊 あなたは凍結中です。", ephemeral=True
-                )
-                return
-            try:
-                await db.adjust_balance(user.id, -bet, "slot_bet")
-            except InsufficientFunds:
-                await common.respond_with(
-                    interaction, content="残高が足りません。", ephemeral=True
-                )
-                return
-            # ベットの一部をジャックポットへ積む(再分配)
-            contrib = economy.jackpot_contribution(db, bet)
-            if contrib:
-                await db.jackpot_add(contrib)
-        # 前回ベット記憶(連戦の default にする)
-        try:
-            await db.set_last_bet(user.id, "slot", bet)
-        except Exception:  # noqa: BLE001
-            pass
-        # 全体JP: スロット以外の場所でもフックされる横串。当選時は即配布。
-        from core import global_jackpot as _gjp
-        await _gjp.hook_pve_bet(self.bot, user.id, bet)
 
         # 抽選(結果は先に確定。演出だけ後で順次表示)
         reels = [_spin_reel() for _ in range(3)]

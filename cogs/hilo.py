@@ -112,30 +112,14 @@ class HiloCog(commands.Cog):
         )
 
     async def _start(self, interaction: discord.Interaction, bet: int) -> None:
-        db = self.bot.db
+        from core import pve_base
         user = interaction.user
-        if await common.self_limit_guard(interaction, bet):
+        ok = await pve_base.take_bet(
+            self.bot, interaction, user.id, bet,
+            reason="hilo_bet", game_key="hilo",
+        )
+        if not ok:
             return
-        async with db.user_lock(user.id):
-            if await db.is_frozen(user.id):
-                await common.respond_with(
-                    interaction, content="🧊 凍結中です。", ephemeral=True
-                )
-                return
-            try:
-                await db.adjust_balance(user.id, -bet, "hilo_bet")
-            except InsufficientFunds:
-                await common.respond_with(
-                    interaction, content="残高が足りません。", ephemeral=True
-                )
-                return
-        try:
-            await db.set_last_bet(user.id, "hilo", bet)
-        except Exception:  # noqa: BLE001
-            pass
-        # 全体JP積立&当選判定(横串)
-        from core import global_jackpot as _gjp
-        await _gjp.hook_pve_bet(self.bot, user.id, bet)
         session = HiloSession(bet)
         view = HiloView(self, session, user.id)
         await common.respond_with(

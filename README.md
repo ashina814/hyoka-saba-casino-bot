@@ -1,5 +1,7 @@
 # 🎰 Discord カジノBot
 
+![tests](https://github.com/ashina814/hyoka-saba-casino-bot/actions/workflows/test.yml/badge.svg)
+
 PVE/PVP のミニカジノを Discord 上で運営できるBot。
 コマンドは全て日本語、操作はパネル(ボタン)中心。
 チップ経済は Bot 内で完結し、**インフレ対策・射幸性演出・管理ダッシュボード・大会・全体JP・称号・ガチャ・ショップ** まで一通り揃ったマルチ機能セット。
