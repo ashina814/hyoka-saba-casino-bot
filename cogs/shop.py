@@ -44,7 +44,7 @@ SHOP_ITEMS: list[ShopItem] = [
              "運だけは誰にも負けない"),
     ShopItem("title_night_owl",  "夜の住人",       "🦉", 8000,
              "深夜カジノの常連"),
-    ShopItem("title_legend",     "伝説",          "👑", 100000,
+    ShopItem("title_legend",     "伝説",          "👑", 2000000,
              "もはや畏怖の対象"),
 ]
 SHOP_BY_ID = {it.id: it for it in SHOP_ITEMS}
